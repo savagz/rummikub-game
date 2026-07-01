@@ -1,0 +1,1251 @@
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import socket from '../socket.js'
+import { isValidMeld, calculateScore, tryReplaceJoker } from '../game/rummikubEngine.js'
+
+const DIFF_SECS = { easy: 120, medium: 90, hard: 40 }
+const COLOR_ORDER = { red: 0, blue: 1, black: 2, yellow: 3 }
+const NUM_COLOR = { red: '#E53935', blue: '#2196F3', black: '#212121', yellow: '#EAB308' }
+
+let _zoneId = 0
+function nextZoneId() { return `z-${++_zoneId}` }
+
+function useSounds() {
+  const ctxRef = useRef(null)
+  return useCallback((type) => {
+    try {
+      if (!ctxRef.current || ctxRef.current.state === 'closed') {
+        ctxRef.current = new (window.AudioContext || window.webkitAudioContext)()
+      }
+      const ctx = ctxRef.current
+      if (ctx.state === 'suspended') ctx.resume()
+      const now = ctx.currentTime
+      const tone = (freq, start, dur, vol = 0.12, wave = 'sine') => {
+        const o = ctx.createOscillator(), g = ctx.createGain()
+        o.connect(g); g.connect(ctx.destination)
+        o.type = wave; o.frequency.setValueAtTime(freq, now + start)
+        g.gain.setValueAtTime(vol, now + start)
+        g.gain.exponentialRampToValueAtTime(0.001, now + start + dur)
+        o.start(now + start); o.stop(now + start + dur)
+      }
+      switch (type) {
+        case 'place':   tone(600, 0, 0.09, 0.08, 'triangle'); break
+        case 'take':    tone(320, 0, 0.1, 0.1, 'triangle'); tone(200, 0.07, 0.1, 0.07, 'triangle'); break
+        case 'draw':    tone(440, 0, 0.08, 0.1); tone(330, 0.07, 0.12, 0.08); break
+        case 'meld':    [523, 659, 784].forEach((f, i) => tone(f, i * 0.1, 0.18, 0.14)); break
+        case 'confirm': [523, 659, 784, 1047].forEach((f, i) => tone(f, i * 0.08, 0.2, 0.17)); break
+        case 'error':   tone(220, 0, 0.15, 0.1, 'sawtooth'); tone(165, 0.12, 0.18, 0.08, 'sawtooth'); break
+        case 'turn':    tone(880, 0, 0.2, 0.14); tone(1108, 0.18, 0.28, 0.16); break
+        case 'tick':    tone(1000, 0, 0.08, 0.2, 'square'); break
+        case 'urgent':  tone(1200, 0, 0.1, 0.25, 'square'); tone(800, 0.1, 0.12, 0.2, 'square'); break
+        default: break
+      }
+    } catch { /* AudioContext unavailable */ }
+  }, [])
+}
+
+function useTimer(turnStartedAt, total, active) {
+  const [left, setLeft] = useState(total)
+  useEffect(() => {
+    if (!active || !turnStartedAt) { setLeft(total); return }
+    const tick = () => setLeft(Math.max(0, Math.ceil(total - (Date.now() - turnStartedAt) / 1000)))
+    tick()
+    const id = setInterval(tick, 250)
+    return () => clearInterval(id)
+  }, [turnStartedAt, total, active])
+  return left
+}
+
+function CircularTimer({ left, total }) {
+  const r = 34, circ = 2 * Math.PI * r
+  const pct = Math.max(0, left / total)
+  const color = left <= 10 ? '#EF4444' : left <= total * 0.3 ? '#F59E0B' : '#22C55E'
+  return (
+    <svg width="80" height="80" viewBox="0 0 80 80" className="absolute inset-0 pointer-events-none">
+      <circle cx="40" cy="40" r={r} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="3" />
+      <circle cx="40" cy="40" r={r} fill="none" stroke={color} strokeWidth="3"
+        strokeDasharray={circ} strokeDashoffset={circ * (1 - pct)}
+        strokeLinecap="round" transform="rotate(-90 40 40)"
+        style={{ transition: 'stroke-dashoffset 0.5s linear, stroke 0.3s' }} />
+    </svg>
+  )
+}
+
+function PlayerAvatar({ player, isCurrent, isMe, left, total }) {
+  const urgent = left <= 10
+  return (
+    <div className="flex flex-col items-center" style={{ minWidth: 100 }}>
+      <div className="relative w-20 h-20">
+        {isCurrent && <CircularTimer left={left} total={total} />}
+        <div className={`w-full h-full rounded-full overflow-hidden border-[3px] transition-all
+          ${isCurrent
+            ? (urgent
+              ? 'border-red-400 shadow-[0_0_18px_rgba(239,68,68,0.6)]'
+              : 'border-purple-400 shadow-[0_0_18px_rgba(168,85,247,0.5)]')
+            : 'border-white/15'}`}
+        >
+          {player.avatar?.url
+            ? <img src={player.avatar.url} alt="" className="w-full h-full object-cover" />
+            : <div className="w-full h-full flex items-center justify-center text-3xl bg-white/5">👤</div>}
+        </div>
+        {isCurrent && (
+          <div className="absolute inset-0 grid place-content-center bg-black/50 rounded-full">
+            <span className={`font-heading text-xl font-bold ${urgent ? 'text-red-400 animate-pulse' : 'text-white'}`}>
+              {left}
+            </span>
+          </div>
+        )}
+      </div>
+      <div className={`w-full rounded-lg px-3 py-2 flex justify-between items-center gap-1 mt-2 transition-all
+        ${isCurrent
+          ? (urgent
+            ? 'bg-red-950/60 border border-red-500/40 shadow-[0_0_12px_rgba(239,68,68,0.3)]'
+            : 'bg-purple-950/60 border border-purple-500/40 shadow-[0_0_12px_rgba(168,85,247,0.3)]')
+          : 'bg-black/40 border border-white/5'}`}
+      >
+        <span className={`text-xs font-semibold truncate max-w-[64px] ${isMe ? 'text-purple-300' : 'text-white'}`}>
+          {player.name}
+        </span>
+        <div className="flex items-center gap-1.5 shrink-0" style={{ fontSize: 10, color: '#94A3B8' }}>
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+          </svg>
+          {player.handCount}
+          {player.hasInitialMeld && <span className="text-green-400">✓</span>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CreamTile({ tile, className = '', style = {}, ...rest }) {
+  const colorCls = tile.isJoker ? 'ctile-joker' : `ctile-${tile.color}`
+  return (
+    <div className={`ctile ${colorCls} ${className}`} style={style} {...rest}>
+      {tile.isJoker ? '★' : tile.number}
+    </div>
+  )
+}
+
+function BoardMeld({ meld, originalIdx, isDropTarget, canInteract, draggingTileId, onTileDragStart, onMeldDragStart, onMeldDragEnd, onDrop, onDragOverMeld }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <div
+        className={`flex gap-1 p-2 rounded-xl border transition-all duration-150
+          ${isDropTarget ? 'meld-drop-active' : 'border-white/10 bg-white/5'}
+          ${canInteract ? 'cursor-pointer' : ''}
+          `}
+        draggable={canInteract}
+        onDragStart={canInteract ? (e) => onMeldDragStart(e, originalIdx) : undefined}
+        onDragEnd={canInteract ? onMeldDragEnd : undefined}
+        onDragOver={canInteract ? (e) => { e.preventDefault(); e.stopPropagation(); onDragOverMeld && onDragOverMeld(e, originalIdx) } : undefined}
+        onDrop={canInteract ? (e) => onDrop(e, originalIdx) : undefined}
+        title={canInteract ? 'Arrastra fichas de tu mano para añadir, o arrastra una ficha para tomar' : undefined}
+      >
+        {meld.map((tile, tileIdx) => (
+          <CreamTile
+            key={tile.id}
+            tile={tile}
+            className={`board-ctile ${draggingTileId === tile.id ? 'opacity-30' : ''}`}
+            draggable={canInteract}
+            onDragStart={canInteract ? (e) => { e.stopPropagation(); onTileDragStart(e, originalIdx, tile, tileIdx) } : undefined}
+            onDragEnd={canInteract ? onMeldDragEnd : undefined}
+            style={{
+              pointerEvents: canInteract ? 'auto' : 'none',
+              cursor: canInteract ? 'grab' : 'default',
+            }}
+          />
+        ))}
+      </div>
+      
+    </div>
+  )
+}
+
+function Zone({ zone, canInteract, isDropTarget, dragTileId, onZoneDrop, onTileDragStart, onTileDragEnd, onClearZone, onDoubleClickTile, fromBoard }) {
+  const valid = zone.tiles.length >= 3 && isValidMeld(zone.tiles)
+  const showStatus = zone.tiles.length > 0
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div
+        className={`flex gap-1 p-2 rounded-xl border-2 transition-all duration-150
+          ${isDropTarget ? 'meld-drop-active' : 'border-green-500/30 bg-green-900/10'}`}
+        onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
+        onDrop={(e) => onZoneDrop(e, zone.id, zone.tiles.length)}
+      >
+        {zone.tiles.map((tile, idx) => (
+          <CreamTile
+            key={tile.id}
+            tile={tile}
+            className={`board-ctile ${dragTileId === tile.id ? 'opacity-30' : ''}`}
+            draggable={canInteract}
+            onDragStart={canInteract ? (e) => onTileDragStart(e, zone.id, tile, idx) : undefined}
+            onDragEnd={canInteract ? onTileDragEnd : undefined}
+            onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
+            onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onZoneDrop(e, zone.id, idx) }}
+            onDoubleClick={() => canInteract && onDoubleClickTile(zone.id, tile.id)}
+            style={{
+              cursor: canInteract ? 'grab' : 'default',
+              ...(fromBoard.has(tile.id) ? { outline: '2px solid rgba(59,130,246,0.6)', outlineOffset: 1 } : {}),
+            }}
+            title={fromBoard.has(tile.id) ? 'Ficha del tablero' : 'Doble clic para devolver a mano'}
+          />
+        ))}
+        {showStatus && (
+          <div className="flex items-center ml-1" style={{ fontSize: 10, whiteSpace: 'nowrap' }}>
+            <span style={{ color: valid ? '#4ADE80' : '#F87171' }}>
+              {valid ? '✓' : zone.tiles.length < 3 ? `${zone.tiles.length}/3` : '✗'}
+            </span>
+          </div>
+        )}
+      </div>
+      {canInteract && (
+        <button
+          onClick={() => onClearZone(zone.id)}
+          style={{
+            fontSize: 9, padding: '2px 6px', borderRadius: 4, border: '1px solid rgba(239,68,68,0.3)',
+            background: 'rgba(239,68,68,0.08)', color: 'rgba(239,68,68,0.7)', cursor: 'pointer',
+            fontFamily: 'Chakra Petch', textAlign: 'center', transition: 'all 0.15s', alignSelf: 'flex-start'
+          }}
+          title="Devolver todas las fichas de esta zona"
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  )
+}
+
+export default function GameScreen({ roomState, socketId, error, clearError }) {
+  const sound = useSounds()
+
+  const [zones, setZones] = useState([])
+  const [affectedMeldIndices, setAffectedMeldIndices] = useState([])
+  const [sortBy, setSortBy] = useState(null)
+  const [dropTarget, setDropTarget] = useState(null)
+  const [dragTileId, setDragTileId] = useState(null)
+  const [localError, setLocalError] = useState(null)
+  const [drawnTileId, setDrawnTileId] = useState(null)
+  const [opponentDraft, setOpponentDraft] = useState(null)
+
+  const autoDrawnRef = useRef(false)
+  const pendingDrawRef = useRef(false)
+  const prevHandRef = useRef([])
+  const prevIsMyTurnRef = useRef(false)
+  const dragFrom = useRef(null)
+  const dragMeldIdx = useRef(null)
+  const dragZoneIdRef = useRef(null)
+  const handleEndTurnRef = useRef()
+
+  const me = roomState?.players?.find(p => p.id === socketId)
+  const isMyTurn = roomState?.currentPlayerId === socketId
+  const myHand = roomState?.yourHand ?? []
+  const board = roomState?.board ?? []
+  const currentPlayer = roomState?.players?.find(p => p.id === roomState?.currentPlayerId)
+  const totalSecs = DIFF_SECS[roomState?.difficulty] ?? 120
+  const isPlaying = roomState?.status === 'playing'
+  const handMap = useMemo(() => new Map(myHand.map(t => [t.id, t])), [myHand])
+  const timeLeft = useTimer(roomState?.turnStartedAt, totalSecs, isPlaying)
+
+  const zoneTileIds = useMemo(() => new Set(zones.flatMap(z => z.tiles.filter(Boolean).map(t => t.id))), [zones])
+  const hasChanges = zones.length > 0 || affectedMeldIndices.length > 0
+  const canInteractWithBoard = isMyTurn && (me?.hasInitialMeld ?? false)
+
+  const handTileIdsInZones = useMemo(
+    () => new Set(zones.flatMap(z => z.tiles.filter(Boolean).filter(t => handMap.has(t.id)).map(t => t.id))),
+    [zones, handMap]
+  )
+
+  const boardTileIdsInZones = useMemo(
+    () => new Set(zones.flatMap(z => z.tiles.filter(Boolean).filter(t => !handMap.has(t.id)).map(t => t.id))),
+    [zones, handMap]
+  )
+
+  const initialMeldHandScore = useMemo(
+    () => calculateScore(zones.flatMap(z => z.tiles.filter(Boolean).filter(t => handMap.has(t.id)))),
+    [zones, handMap]
+  )
+  const meetsInitialMeld = (me?.hasInitialMeld ?? false) || initialMeldHandScore >= 30
+
+  const allAffectedTilesInZones = useMemo(
+    () => affectedMeldIndices.length === 0 ||
+      affectedMeldIndices.every(i => (board[i] || []).every(t => zoneTileIds.has(t.id))),
+    [affectedMeldIndices, board, zoneTileIds]
+  )
+
+  const canFinalizeTurn = hasChanges &&
+    zones.every(z => z.tiles.length >= 3 && isValidMeld(z.tiles)) &&
+    (affectedMeldIndices.length > 0 ? allAffectedTilesInZones : boardTileIdsInZones.size === 0) &&
+    (affectedMeldIndices.length === 0 || handTileIdsInZones.size > 0) &&
+    meetsInitialMeld
+
+  const opponentAffectedSet = useMemo(
+    () => new Set(opponentDraft?.affectedMeldIndices ?? []),
+    [opponentDraft]
+  )
+
+  const visibleBoard = useMemo(
+    () => board.map((meld, i) => ({ meld, i })).filter(({ i }) => !affectedMeldIndices.includes(i) && !opponentAffectedSet.has(i)),
+    [board, affectedMeldIndices, opponentAffectedSet]
+  )
+
+  const allZoneBoardTileIds = useMemo(() => {
+    const ids = new Set()
+    for (const z of zones) {
+      for (const t of z.tiles) {
+        if (!handMap.has(t.id)) ids.add(t.id)
+      }
+    }
+    return ids
+  }, [zones, handMap])
+
+  const displayHand = useMemo(() => {
+    const hand = [...myHand]
+    if (sortBy === 'number') {
+      hand.sort((a, b) => {
+        if (a.isJoker && b.isJoker) return 0
+        if (a.isJoker) return 1; if (b.isJoker) return -1
+        return a.number - b.number || (COLOR_ORDER[a.color] ?? 4) - (COLOR_ORDER[b.color] ?? 4)
+      })
+    } else if (sortBy === 'color') {
+      hand.sort((a, b) => {
+        if (a.isJoker && b.isJoker) return 0
+        if (a.isJoker) return 1; if (b.isJoker) return -1
+        return (COLOR_ORDER[a.color] ?? 4) - (COLOR_ORDER[b.color] ?? 4) || a.number - b.number
+      })
+    }
+    return hand
+  }, [myHand, sortBy])
+
+  useEffect(() => {
+    setZones([])
+    setAffectedMeldIndices([])
+    setOpponentDraft(null)
+    setDropTarget(null)
+    setLocalError(null)
+    autoDrawnRef.current = false
+  }, [roomState?.currentPlayerId])
+
+  useEffect(() => {
+    if (pendingDrawRef.current && myHand.length > prevHandRef.current.length) {
+      const prevIds = new Set(prevHandRef.current.map(t => t.id))
+      const newTile = myHand.find(t => !prevIds.has(t.id))
+      if (newTile) {
+        pendingDrawRef.current = false
+        setDrawnTileId(newTile.id)
+        setTimeout(() => setDrawnTileId(null), 2600)
+      }
+    }
+    prevHandRef.current = myHand
+  }, [myHand])
+
+  const prevCountdownRef = useRef(null)
+  useEffect(() => {
+    if (!isMyTurn || !isPlaying || timeLeft <= 0) return
+    if (timeLeft <= 10) {
+      if (prevCountdownRef.current !== timeLeft) {
+        sound('tick')
+        prevCountdownRef.current = timeLeft
+      }
+    } else {
+      prevCountdownRef.current = null
+    }
+  }, [timeLeft, isMyTurn, isPlaying, sound])
+
+  useEffect(() => {
+    if (isMyTurn && !prevIsMyTurnRef.current && isPlaying) {
+      sound('turn')
+    }
+    prevIsMyTurnRef.current = isMyTurn
+  }, [isMyTurn, isPlaying, sound])
+
+  useEffect(() => {
+    if (!isMyTurn || !isPlaying || !roomState?.turnStartedAt) return
+    const id = setInterval(() => {
+      if (autoDrawnRef.current) return
+      if ((Date.now() - roomState.turnStartedAt) / 1000 >= totalSecs) {
+        autoDrawnRef.current = true
+        handleEndTurnRef.current(true)
+      }
+    }, 500)
+    return () => clearInterval(id)
+  }, [isMyTurn, isPlaying, roomState?.turnStartedAt, totalSecs])
+
+  useEffect(() => { if (error) { setLocalError(error); clearError() } }, [error])
+
+  useEffect(() => {
+    const handler = (draft) => {
+      if (draft.playerId !== socketId) {
+        setOpponentDraft(draft)
+      }
+    }
+    socket.on('draft-updated', handler)
+    return () => socket.off('draft-updated', handler)
+  }, [socketId])
+
+  const prevBoardRef = useRef(null)
+  useEffect(() => {
+    const boardStr = JSON.stringify(board)
+    if (prevBoardRef.current !== null && prevBoardRef.current !== boardStr) {
+      setOpponentDraft(null)
+    }
+    prevBoardRef.current = boardStr
+  }, [board])
+
+  const emitDraftRef = useRef(null)
+  useEffect(() => {
+    if (!isMyTurn || !isPlaying) { setOpponentDraft(null); return }
+    if (emitDraftRef.current) clearTimeout(emitDraftRef.current)
+    emitDraftRef.current = setTimeout(() => {
+      socket.emit('update-draft', {
+        zones: zones.map(z => ({ id: z.id, tiles: z.tiles })),
+        affectedMeldIndices,
+      })
+    }, 150)
+    return () => { if (emitDraftRef.current) clearTimeout(emitDraftRef.current) }
+  }, [zones, affectedMeldIndices, isMyTurn, isPlaying])
+
+  function showError(msg) {
+    sound('error')
+    setLocalError(msg)
+    setTimeout(() => setLocalError(null), 3500)
+  }
+
+  function clearAllState() {
+    setZones([])
+    setAffectedMeldIndices([])
+    setLocalError(null)
+    setDropTarget(null)
+  }
+
+  function sortTiles(tiles) {
+    const nonJokers = tiles.filter(t => !t.isJoker)
+    const jokers = tiles.filter(t => t.isJoker)
+    const sortByNumColor = arr => [...arr].sort((a, b) => {
+      if (a.number !== b.number) return a.number - b.number
+      return (COLOR_ORDER[a.color] ?? 4) - (COLOR_ORDER[b.color] ?? 4)
+    })
+    if (jokers.length === 0 || nonJokers.length < 2) {
+      return sortByNumColor(tiles)
+    }
+    const colors = new Set(nonJokers.map(t => t.color))
+    if (colors.size !== 1) {
+      return [...sortByNumColor(nonJokers), ...jokers]
+    }
+    const sorted = [...nonJokers].sort((a, b) => a.number - b.number)
+    let gaps = 0
+    for (let i = 1; i < sorted.length; i++) {
+      gaps += sorted[i].number - sorted[i - 1].number - 1
+    }
+    const extra = jokers.length - gaps
+    const min = sorted[0].number
+    const max = sorted[sorted.length - 1].number
+    let extraBefore = extra
+    let extraAfter = 0
+    for (let b = 0; b <= extra; b++) {
+      const start = min - b
+      const end = max + (extra - b)
+      if (start >= 1 && end <= 13) {
+        extraBefore = b
+        extraAfter = extra - b
+        break
+      }
+    }
+    const result = []
+    let jIdx = 0
+    for (let i = 0; i < extraBefore; i++) result.push(jokers[jIdx++])
+    for (let i = 0; i < sorted.length; i++) {
+      result.push(sorted[i])
+      if (i < sorted.length - 1) {
+        const gap = sorted[i + 1].number - sorted[i].number - 1
+        for (let g = 0; g < gap; g++) result.push(jokers[jIdx++])
+      }
+    }
+    for (let i = 0; i < extraAfter; i++) result.push(jokers[jIdx++])
+    while (jIdx < jokers.length) result.push(jokers[jIdx++])
+    return result
+  }
+
+  function createZone(tiles) {
+    const id = nextZoneId()
+    const clean = tiles.filter(Boolean)
+    setZones(prev => [...prev, { id, tiles: sortTiles(clean) }])
+    return id
+  }
+
+  function addTilesToZone(zoneId, tiles, insertAt) {
+    const clean = tiles.filter(Boolean)
+    setZones(prev => prev.map(z => {
+      if (z.id !== zoneId) return z
+      const newTiles = [...z.tiles, ...clean]
+      return { ...z, tiles: sortTiles(newTiles) }
+    }))
+  }
+
+  function removeTileFromZone(zoneId, tileId) {
+    let removed = false
+    setZones(prev => {
+      const newZones = prev.map(z => {
+        if (z.id !== zoneId) return z
+        const filtered = z.tiles.filter(t => t.id !== tileId)
+        if (filtered.length !== z.tiles.length) removed = true
+        return { ...z, tiles: filtered }
+      }).filter(z => z.tiles.length > 0)
+      return newZones
+    })
+    return removed
+  }
+
+  function removeZone(zoneId) {
+    setZones(prev => prev.filter(z => z.id !== zoneId))
+  }
+
+  function affectMeld(meldIdx) {
+    if (!affectedMeldIndices.includes(meldIdx)) {
+      setAffectedMeldIndices(prev => [...prev, meldIdx])
+    }
+  }
+
+  function handleRackTileDropOnBoard(tileId, targetZoneId, insertAt) {
+    const tile = handMap.get(tileId)
+    if (!tile || zoneTileIds.has(tileId)) return
+
+    sound('place')
+    const handTilesOnly = !me?.hasInitialMeld
+
+    if (targetZoneId) {
+      addTilesToZone(targetZoneId, [tile], insertAt)
+    } else {
+      const zid = createZone([tile])
+
+    }
+  }
+
+  function handleBoardTileDrop(tileId, meldIdx, targetZoneId, insertAt) {
+    const meld = board[meldIdx]
+    if (!meld || !canInteractWithBoard) return
+
+    sound('take')
+    affectMeld(meldIdx)
+
+    const tileIdx = meld.findIndex(t => t.id === tileId)
+    if (tileIdx === -1) return
+    const draggedTile = meld[tileIdx]
+    const before = meld.slice(0, tileIdx)
+    const after = meld.slice(tileIdx + 1)
+
+    if (targetZoneId) {
+      addTilesToZone(targetZoneId, [draggedTile], insertAt)
+      if (before.length > 0) createZone(before)
+      if (after.length > 0) createZone(after)
+    } else {
+      createZone([draggedTile])
+      if (before.length > 0) createZone(before)
+      if (after.length > 0) createZone(after)
+    }
+  }
+
+  function handleBoardMeldDropOnMeld(rackTileId, meldIdx) {
+    if (!canInteractWithBoard) return
+    const meld = board[meldIdx]
+    if (!meld) return
+    const tile = handMap.get(rackTileId)
+    if (!tile) return
+
+    if (meld.some(t => t.isJoker)) {
+      const replacement = tryReplaceJoker(meld, tile)
+      if (replacement) {
+        sound('confirm')
+        affectMeld(meldIdx)
+        const newMeld = meld.map((t, i) => i === replacement.jokerIndex ? tile : t)
+        const freedJoker = meld[replacement.jokerIndex]
+        createZone(newMeld)
+        createZone([freedJoker])
+        return
+      }
+    }
+
+    sound('place')
+    affectMeld(meldIdx)
+    createZone([...meld, tile])
+  }
+
+  function handleBoardTileDropOnMeld(tileId, srcMeldIdx, targetMeldIdx) {
+    const srcMeld = board[srcMeldIdx]
+    const targetMeld = board[targetMeldIdx]
+    if (!srcMeld || !targetMeld || !canInteractWithBoard) return
+
+    sound('place')
+    affectMeld(srcMeldIdx)
+    affectMeld(targetMeldIdx)
+
+    const tileIdx = srcMeld.findIndex(t => t.id === tileId)
+    if (tileIdx === -1) return
+    const draggedTile = srcMeld[tileIdx]
+    const before = srcMeld.slice(0, tileIdx)
+    const after = srcMeld.slice(tileIdx + 1)
+
+    createZone([...targetMeld, draggedTile])
+    if (before.length > 0) createZone(before)
+    if (after.length > 0) createZone(after)
+  }
+
+  function handleZoneTileDropOnMeld(tileId, srcZoneId, targetMeldIdx) {
+    const targetMeld = board[targetMeldIdx]
+    if (!targetMeld || !isMyTurn) return
+
+    const tile = zones.find(z => z.id === srcZoneId)?.tiles.find(t => t.id === tileId)
+    if (!tile) return
+
+    sound('place')
+    affectMeld(targetMeldIdx)
+    removeTileFromZone(srcZoneId, tileId)
+    createZone([...targetMeld, tile])
+  }
+
+  function handleTakeMeld(meldIdx) {
+    if (!canInteractWithBoard) return
+    const meld = board[meldIdx]
+    if (!meld) return
+
+    sound('take')
+    affectMeld(meldIdx)
+    createZone([...meld])
+  }
+
+  function handleZoneTileDrop(tileId, sourceZoneId, targetZoneId, insertAt) {
+    if (sourceZoneId === targetZoneId) {
+      if (insertAt === undefined) return
+      setZones(prev => prev.map(z => {
+        if (z.id !== sourceZoneId) return z
+        const idx = z.tiles.findIndex(t => t.id === tileId)
+        if (idx === -1) return z
+        const newTiles = [...z.tiles]
+        const [moved] = newTiles.splice(idx, 1)
+        const pos = insertAt > idx ? insertAt - 1 : insertAt
+        newTiles.splice(Math.min(pos, newTiles.length), 0, moved)
+        return { ...z, tiles: newTiles }
+      }))
+    } else {
+      const tile = zones.find(z => z.id === sourceZoneId)?.tiles.find(t => t.id === tileId)
+      if (!tile) return
+      removeTileFromZone(sourceZoneId, tileId)
+      addTilesToZone(targetZoneId, [tile], insertAt)
+    }
+  }
+
+  function handleDoubleClickZoneTile(zoneId, tileId) {
+    if (!handMap.has(tileId)) return
+    removeTileFromZone(zoneId, tileId)
+    sound('place')
+  }
+
+  function handleCancelZone(zoneId) {
+    const zone = zones.find(z => z.id === zoneId)
+    if (!zone) return
+    const boardTiles = zone.tiles.filter(t => !handMap.has(t.id))
+    const handTiles = zone.tiles.filter(t => handMap.has(t.id))
+    removeZone(zoneId)
+    if (boardTiles.length > 0) createZone(boardTiles)
+    if (handTiles.length > 0) sound('place')
+  }
+
+  function handleUndo() {
+    if (!isMyTurn || zones.length === 0) return
+    clearAllState()
+    sound('place')
+  }
+
+  function handleEndTurn(isTimeout) {
+    if (!isMyTurn) return
+
+    if (!hasChanges) {
+      if (isTimeout) {
+        pendingDrawRef.current = true
+        socket.emit('draw-tile')
+      }
+      return
+    }
+
+    if (isTimeout) {
+      const validZones = zones.filter(z => z.tiles.length >= 3 && isValidMeld(z.tiles))
+      if (validZones.length === 0) {
+        revertTurn('Tiempo agotado. No hay jugadas válidas.')
+        return
+      }
+      const validTileIds = new Set(validZones.flatMap(z => z.tiles.map(t => t.id)))
+      const validHandIds = [...handTileIdsInZones].filter(id => validTileIds.has(id))
+
+      if (affectedMeldIndices.length > 0) {
+        const allAffectedInValid = affectedMeldIndices.every(i =>
+          (board[i] || []).every(t => validTileIds.has(t.id))
+        )
+        if (!allAffectedInValid || validHandIds.length === 0) {
+          revertTurn('Tiempo agotado. Reorganización del tablero incompleta.')
+          return
+        }
+        sound('confirm')
+        socket.emit('full-board-play', {
+          removedMeldIndices: affectedMeldIndices,
+          newMelds: validZones.map(z => z.tiles.map(t => t.id)),
+          handTileIds: validHandIds,
+        })
+      } else {
+        const handScore = calculateScore(validZones.flatMap(z =>
+          z.tiles.filter(t => handMap.has(t.id))
+        ))
+        if (!me?.hasInitialMeld && handScore < 30) {
+          revertTurn(`Tiempo agotado. Primer meld no llega a 30 pts (tienes ${handScore}).`)
+          return
+        }
+        sound('confirm')
+        socket.emit('play-melds', { melds: validZones.map(z => z.tiles.map(t => t.id)) })
+      }
+      return
+    }
+
+    const invalidZones = zones.filter(z => z.tiles.length < 3 || !isValidMeld(z.tiles))
+    const badBoardTiles = affectedMeldIndices.length > 0
+      ? !allAffectedTilesInZones
+      : boardTileIdsInZones.size > 0
+
+    if (invalidZones.length > 0 || badBoardTiles) {
+      revertTurn('Jugada inválida. Se revirtió el tablero y robaste una ficha.')
+      return
+    }
+
+    if (affectedMeldIndices.length > 0 && handTileIdsInZones.size === 0) {
+      revertTurn('Debes usar al menos una ficha de tu mano al reorganizar el tablero.')
+      return
+    }
+
+    if (!me?.hasInitialMeld && initialMeldHandScore < 30) {
+      revertTurn(`Primera bajada necesita ≥30 pts de tu mano. Tienes ${initialMeldHandScore}.`)
+      return
+    }
+
+    sound('confirm')
+
+    const newMelds = zones.filter(z => z.tiles.length >= 3 && isValidMeld(z.tiles)).map(z => z.tiles.map(t => t.id))
+
+    if (affectedMeldIndices.length > 0) {
+      socket.emit('full-board-play', {
+        removedMeldIndices: affectedMeldIndices,
+        newMelds,
+        handTileIds: [...handTileIdsInZones],
+      })
+    } else {
+      socket.emit('play-melds', { melds: newMelds })
+    }
+  }
+  handleEndTurnRef.current = handleEndTurn
+
+  function revertTurn(msg) {
+    clearAllState()
+    pendingDrawRef.current = true
+    sound('draw')
+    socket.emit('draw-tile')
+    showError(msg || 'Jugada inválida. Se revirtió y robaste una ficha.')
+  }
+
+  function drawTile() {
+    clearAllState()
+    pendingDrawRef.current = true
+    sound('draw')
+    socket.emit('draw-tile')
+  }
+
+  function onRackDragStart(e, tile) {
+    if (!isMyTurn || zoneTileIds.has(tile.id)) { e.preventDefault(); return }
+    dragFrom.current = 'rack'
+    setDragTileId(tile.id)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'rack', tileId: tile.id }))
+  }
+
+  function onBoardTileDragStart(e, meldIdx, tile) {
+    if (!canInteractWithBoard) { e.preventDefault(); return }
+    dragFrom.current = 'boardTile'
+    dragMeldIdx.current = meldIdx
+    setDragTileId(tile.id)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'boardTile', meldIdx, tileId: tile.id }))
+  }
+
+  function onBoardMeldDragStart(e, meldIdx) {
+    if (!canInteractWithBoard) { e.preventDefault(); return }
+    dragFrom.current = 'boardMeld'
+    dragMeldIdx.current = meldIdx
+    setDragTileId(null)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'boardMeld', meldIdx }))
+  }
+
+  function onZoneTileDragStart(e, zoneId, tile) {
+    dragFrom.current = 'zoneTile'
+    dragZoneIdRef.current = zoneId
+    setDragTileId(tile.id)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'zoneTile', zoneId, tileId: tile.id }))
+  }
+
+  function onDragEnd() {
+    setDragTileId(null)
+    setDropTarget(null)
+    dragFrom.current = null
+    dragMeldIdx.current = null
+    dragZoneIdRef.current = null
+  }
+
+  function parseDragData(e) {
+    try {
+      return JSON.parse(e.dataTransfer.getData('text/plain'))
+    } catch {
+      const raw = e.dataTransfer.getData('text/plain')
+      if (raw && !raw.startsWith('{')) {
+        return { type: 'rack', tileId: raw }
+      }
+      return null
+    }
+  }
+
+  function onBoardDrop(e) {
+    e.preventDefault()
+    if (!isMyTurn) return
+    const data = parseDragData(e)
+    if (!data) return
+
+    if (data.type === 'rack') {
+      handleRackTileDropOnBoard(data.tileId, null, undefined)
+    } else if (data.type === 'boardTile') {
+      handleBoardTileDrop(data.tileId, data.meldIdx, null, undefined)
+    } else if (data.type === 'boardMeld') {
+      handleTakeMeld(data.meldIdx)
+    } else if (data.type === 'zoneTile') {
+      const sourceZone = zones.find(z => z.id === data.zoneId)
+      if (sourceZone) {
+        const tile = sourceZone.tiles.find(t => t.id === data.tileId)
+        if (tile) {
+          removeTileFromZone(data.zoneId, data.tileId)
+          createZone([tile])
+        }
+      }
+    }
+
+    setDropTarget(null)
+    setDragTileId(null)
+  }
+
+  function onZoneDrop(e, zoneId, insertAt) {
+    e.preventDefault(); e.stopPropagation()
+    if (!isMyTurn) return
+    const data = parseDragData(e)
+    if (!data) return
+
+    if (data.type === 'rack') {
+      handleRackTileDropOnBoard(data.tileId, zoneId, insertAt)
+    } else if (data.type === 'boardTile') {
+      handleBoardTileDrop(data.tileId, data.meldIdx, zoneId, insertAt)
+    } else if (data.type === 'boardMeld') {
+      const meld = board[data.meldIdx]
+      if (meld) {
+        affectMeld(data.meldIdx)
+        addTilesToZone(zoneId, [...meld], insertAt)
+      }
+    } else if (data.type === 'zoneTile') {
+      handleZoneTileDrop(data.tileId, data.zoneId, zoneId, insertAt)
+    }
+
+    setDropTarget(null)
+    setDragTileId(null)
+  }
+
+  function onMeldDrop(e, meldIdx) {
+    e.preventDefault(); e.stopPropagation()
+    if (!isMyTurn) return
+    const data = parseDragData(e)
+    if (!data) return
+
+    if (data.type === 'rack') {
+      handleBoardMeldDropOnMeld(data.tileId, meldIdx)
+    } else if (data.type === 'boardTile') {
+      handleBoardTileDropOnMeld(data.tileId, data.meldIdx, meldIdx)
+    } else if (data.type === 'zoneTile') {
+      handleZoneTileDropOnMeld(data.tileId, data.zoneId, meldIdx)
+    }
+
+    setDropTarget(null)
+    setDragTileId(null)
+  }
+
+  function onRackDrop(e) {
+    e.preventDefault()
+    if (!isMyTurn) return
+    const data = parseDragData(e)
+    if (!data) return
+
+    if (data.type === 'zoneTile') {
+      const tile = zones.find(z => z.id === data.zoneId)?.tiles.find(t => t.id === data.tileId)
+      if (tile && handMap.has(tile.id)) {
+        removeTileFromZone(data.zoneId, data.tileId)
+        sound('place')
+      }
+    }
+
+    setDropTarget(null)
+    setDragTileId(null)
+  }
+
+  const diffLabel = { easy: 'Fácil', medium: 'Medio', hard: 'Difícil' }[roomState?.difficulty] ?? ''
+  const midpoint = Math.ceil(displayHand.length / 2)
+  const row1 = displayHand.slice(0, midpoint)
+  const row2 = displayHand.slice(midpoint)
+
+  return (
+    <div className="game-root">
+
+      {/* ── TOP BAR ─────────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 16px', background: 'rgba(0,0,0,0.35)', borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
+        <div className="flex items-center gap-3">
+          <span className="font-heading text-neon" style={{ color: '#A78BFA', fontSize: '1rem' }}>RUMMIKUB</span>
+          <span style={{ fontSize: 11, color: '#64748B' }}>
+            Sala <span style={{ color: '#FCD34D', fontWeight: 700 }}>{roomState?.code}</span>
+          </span>
+          <span style={{ fontSize: 11, color: '#64748B' }}>Mazo: <span style={{ color: roomState?.deckCount === 0 ? '#F87171' : 'white' }}>{roomState?.deckCount ?? 0}</span></span>
+          {roomState?.deckCount === 0 && (
+            <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 999, background: 'rgba(239,68,68,0.15)', color: '#F87171', border: '1px solid rgba(239,68,68,0.3)' }}>
+              Pozo agotado
+            </span>
+          )}
+          {diffLabel && (
+            <span style={{
+              fontSize: 10, padding: '2px 8px', borderRadius: 999,
+              background: { easy: 'rgba(34,197,94,0.15)', medium: 'rgba(234,179,8,0.15)', hard: 'rgba(239,68,68,0.15)' }[roomState?.difficulty],
+              color: { easy: '#4ADE80', medium: '#FDE047', hard: '#F87171' }[roomState?.difficulty],
+              border: `1px solid ${{ easy: 'rgba(34,197,94,0.3)', medium: 'rgba(234,179,8,0.3)', hard: 'rgba(239,68,68,0.3)' }[roomState?.difficulty]}`,
+            }}>
+              {diffLabel} · {totalSecs}s
+            </span>
+          )}
+        </div>
+        <div style={{
+          padding: '3px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600,
+          background: isMyTurn ? 'rgba(34,197,94,0.2)' : 'rgba(255,255,255,0.05)',
+          color: isMyTurn ? '#4ADE80' : '#94A3B8',
+          border: `1px solid ${isMyTurn ? 'rgba(34,197,94,0.4)' : 'rgba(255,255,255,0.1)'}`,
+        }}>
+          {isMyTurn ? '¡Tu turno!' : `Turno: ${currentPlayer?.name ?? '...'}`}
+        </div>
+      </div>
+
+      {/* ── PLAYERS ─────────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', justifyContent: 'center', gap: 28, padding: '10px 16px 8px', background: 'rgba(0,0,0,0.2)', flexShrink: 0, borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+        {roomState?.players?.map(p => (
+          <PlayerAvatar
+            key={p.id}
+            player={p}
+            isCurrent={p.id === roomState?.currentPlayerId}
+            isMe={p.id === socketId}
+            left={p.id === roomState?.currentPlayerId ? timeLeft : totalSecs}
+            total={totalSecs}
+          />
+        ))}
+      </div>
+
+      {/* ── BOARD ───────────────────────────────────────────────────────── */}
+      <div
+        style={{ flex: 1, overflow: 'auto', position: 'relative', padding: 16 }}
+        onDragOver={(e) => { e.preventDefault(); if (dropTarget !== 'board') setDropTarget('board') }}
+        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDropTarget(null) }}
+        onDrop={onBoardDrop}
+      >
+        <div style={{
+          position: 'absolute', top: '38%', left: '50%', transform: 'translate(-50%, -50%)',
+          fontFamily: 'Russo One', pointerEvents: 'none', userSelect: 'none', textAlign: 'center', zIndex: 0
+        }}>
+          <div style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.06)', letterSpacing: '0.2em', marginBottom: 4 }}>The Original</div>
+          <div style={{ fontSize: '2.5rem', color: 'rgba(255,255,255,0.05)', letterSpacing: '0.05em' }}>Rummikub</div>
+        </div>
+
+        {localError && (
+          <div style={{
+            position: 'sticky', top: 0, zIndex: 20, marginBottom: 10,
+            background: 'rgba(220,38,38,0.2)', border: '1px solid rgba(220,38,38,0.4)',
+            borderRadius: 10, padding: '8px 14px', color: '#FCA5A5',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.85rem'
+          }}>
+            {localError}
+            <button onClick={() => setLocalError(null)} style={{ background: 'none', border: 'none', color: '#FCA5A5', cursor: 'pointer', marginLeft: 8, fontSize: '1rem' }}>✕</button>
+          </div>
+        )}
+
+        <div style={{ position: 'relative', zIndex: 1 }}>
+          {board.length === 0 && zones.length === 0 && (
+            <div style={{ color: 'rgba(255,255,255,0.15)', fontSize: '0.85rem', textAlign: 'center', padding: '40px 0' }}>
+              El tablero está vacío — arrastra fichas para jugar
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-3">
+            {visibleBoard.map(({ meld, i }) => (
+              <BoardMeld
+                key={i}
+                meld={meld}
+                originalIdx={i}
+                isDropTarget={dropTarget === `meld-${i}`}
+                draggingTileId={dragTileId}
+                canInteract={canInteractWithBoard && !me?.hasInitialMeld ? false : canInteractWithBoard}
+                onTileDragStart={onBoardTileDragStart}
+                onMeldDragStart={onBoardMeldDragStart}
+                onMeldDragEnd={onDragEnd}
+                onDrop={onMeldDrop}
+                onDragOverMeld={() => setDropTarget(`meld-${i}`)}
+              />
+            ))}
+          </div>
+
+          {zones.length > 0 && (
+            <div className="flex flex-wrap gap-3 mt-3">
+              {zones.map(zone => (
+                <Zone
+                  key={zone.id}
+                  zone={zone}
+                  canInteract={isMyTurn}
+                  isDropTarget={dropTarget === `zone-${zone.id}`}
+                  dragTileId={dragTileId}
+                  onZoneDrop={onZoneDrop}
+                  onTileDragStart={onZoneTileDragStart}
+                  onTileDragEnd={onDragEnd}
+                  onClearZone={handleCancelZone}
+                  onDoubleClickTile={handleDoubleClickZoneTile}
+                  fromBoard={allZoneBoardTileIds}
+                />
+              ))}
+            </div>
+          )}
+
+          {opponentDraft && opponentDraft.zones.length > 0 && (
+            <div className="mt-4">
+              <div style={{ fontSize: 10, color: 'rgba(251,191,36,0.6)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>
+                {roomState?.players?.find(p => p.id === opponentDraft.playerId)?.name ?? 'Oponente'} está reorganizando...
+              </div>
+              <div className="flex flex-wrap gap-3 opacity-60 pointer-events-none">
+                {opponentDraft.zones.map(zone => (
+                  <div key={zone.id} className="flex gap-1 p-2 rounded-xl border border-yellow-500/30 bg-yellow-900/10">
+                    {zone.tiles.map(tile => (
+                      <CreamTile key={tile.id} tile={tile} className="board-ctile" />
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {isMyTurn && (
+            <div
+              className={`flex items-center justify-center min-h-16 mt-3 p-4 rounded-2xl border-2 border-dashed transition-all duration-150
+                ${dropTarget === 'board' ? 'staging-drop-active' : 'border-white/15 bg-white/3'}`}
+              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); if (dropTarget !== 'board') setDropTarget('board') }}
+              onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onBoardDrop(e) }}
+            >
+              {zones.length === 0 && (
+                <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.8rem', textAlign: 'center' }}>
+                  Arrastra fichas aquí para crear una nueva zona
+                </span>
+              )}
+              {zones.length > 0 && (
+                <span style={{ color: 'rgba(255,255,255,0.15)', fontSize: '0.75rem', textAlign: 'center' }}>
+                  + Arrastra fichas para nueva zona
+                </span>
+              )}
+            </div>
+          )}
+
+          {!me?.hasInitialMeld && hasChanges && (
+            <div style={{ marginTop: 8, fontSize: 11, color: meetsInitialMeld ? '#4ADE80' : '#F87171', textAlign: 'center' }}>
+              {meetsInitialMeld
+                ? `✓ Primera bajada: ${initialMeldHandScore} pts (≥30)`
+                : `Primera bajada: ${initialMeldHandScore} pts — necesitas ≥30 pts de tu mano`}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── RACK ────────────────────────────────────────────────────────── */}
+      <div
+        className={`wood-rack ${dropTarget === 'rack' ? 'rack-drop-active' : ''}`}
+        style={{ flexShrink: 0, padding: '10px 12px 12px' }}
+        onDragOver={(e) => { if (dragFrom.current === 'zoneTile') { e.preventDefault(); setDropTarget('rack') } }}
+        onDragLeave={() => setDropTarget(null)}
+        onDrop={onRackDrop}
+      >
+        <div className="flex items-stretch gap-3">
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0, width: 54 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <span style={{ fontSize: 8, color: 'rgba(0,0,0,0.4)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>tiempo</span>
+              <span style={{ fontSize: 10, fontFamily: 'Russo One', fontWeight: 700,
+                color: timeLeft <= 10 ? '#B91C1C' : timeLeft <= totalSecs * 0.3 ? '#B45309' : '#166534'
+              }}>{isMyTurn ? `${timeLeft}s` : '—'}</span>
+            </div>
+            <div style={{ height: 4, borderRadius: 2, background: 'rgba(0,0,0,0.2)', overflow: 'hidden' }}>
+              {isMyTurn && (
+                <div style={{
+                  height: '100%', borderRadius: 2, transition: 'width 0.5s linear, background 0.3s',
+                  width: `${(timeLeft / totalSecs) * 100}%`,
+                  background: timeLeft <= 10 ? '#DC2626' : timeLeft <= totalSecs * 0.3 ? '#D97706' : '#16A34A'
+                }} />
+              )}
+            </div>
+            <button
+              onClick={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect()
+                const relY = e.clientY - rect.top
+                const half = rect.height / 2
+                setSortBy(s => s === (relY < half ? 'number' : 'color') ? null : (relY < half ? 'number' : 'color'))
+              }}
+              title="Superior: ordenar por nº · Inferior: ordenar por color"
+              style={{
+                flex: 1, borderRadius: 14, border: 'none', cursor: 'pointer',
+                display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden',
+                background: 'linear-gradient(to bottom, #D4956A 0%, #B07040 50%, #8B5520 100%)',
+                outline: sortBy ? '2px solid rgba(252,211,77,0.5)' : '2px solid rgba(255,255,255,0.15)',
+                boxShadow: sortBy ? '0 2px 6px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.15)' : '0 4px 10px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2)',
+                transition: 'all 0.15s'
+              }}
+            >
+              <div style={{
+                flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                background: sortBy === 'number' ? 'rgba(0,0,0,0.2)' : 'transparent',
+                borderBottom: '1px solid rgba(0,0,0,0.15)',
+                gap: 0, transition: 'background 0.15s'
+              }}>
+                <span style={{ color: 'white', fontSize: '1.1rem', lineHeight: 1, fontWeight: 700 }}>#</span>
+                <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.55rem', fontFamily: 'Russo One' }}>777</span>
+              </div>
+              <div style={{
+                flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                background: sortBy === 'color' ? 'rgba(0,0,0,0.2)' : 'transparent',
+                gap: 0, transition: 'background 0.15s'
+              }}>
+                <span style={{ color: 'white', fontSize: '1.1rem', lineHeight: 1, fontWeight: 700 }}>≡</span>
+                <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.55rem', fontFamily: 'Russo One' }}>789</span>
+              </div>
+            </button>
+          </div>
+
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
+            {[row1, row2].map((row, rowIdx) => (
+              <div key={rowIdx} style={{ display: 'flex', gap: 4, flexWrap: 'nowrap', justifyContent: 'center' }}>
+                {row.map(tile => {
+                  const inPlay = zoneTileIds.has(tile.id)
+                  const dragging = dragTileId === tile.id
+                  const isDrawn = tile.id === drawnTileId
+                  const nc = tile.isJoker ? '#ffffff' : NUM_COLOR[tile.color] ?? '#111'
+                  return (
+                    <div
+                      key={tile.id}
+                      draggable={isMyTurn && !inPlay}
+                      onDragStart={(e) => onRackDragStart(e, tile)}
+                      onDragEnd={onDragEnd}
+                      className={`ctile rack-ctile
+                        ${inPlay ? 'rack-ctile-staged' : ''}
+                        ${!isMyTurn || inPlay ? 'rack-ctile-disabled' : ''}
+                        ${dragging ? 'rack-ctile-dragging' : ''}
+                        ${tile.isJoker ? 'ctile-joker' : ''}
+                        ${isDrawn && !inPlay ? 'rack-ctile-drawn' : ''}
+                      `}
+                      style={{ color: inPlay ? 'transparent' : nc }}
+                      title={tile.isJoker ? 'Comodín' : `${tile.number} ${tile.color}`}
+                    >
+                      {inPlay ? '' : tile.isJoker ? '★' : tile.number}
+                    </div>
+                  )
+                })}
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'stretch' }}>
+            <button
+              onClick={isMyTurn && handTileIdsInZones.size === 0 ? drawTile : undefined}
+              disabled={!isMyTurn || handTileIdsInZones.size > 0}
+              title={
+                handTileIdsInZones.size > 0
+                  ? 'Debes confirmar o cancelar tu jugada antes de robar'
+                  : roomState?.deckCount === 0 ? 'Pozo agotado — pasar turno' : 'Robar ficha'
+              }
+              style={{
+                width: 54, borderRadius: 14, border: 'none', cursor: isMyTurn && handTileIdsInZones.size === 0 ? 'pointer' : 'not-allowed',
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, padding: '4px 0',
+                background: isMyTurn && handTileIdsInZones.size === 0
+                  ? (roomState?.deckCount === 0 ? 'rgba(239,68,68,0.4)' : 'linear-gradient(to bottom, #D4956A 0%, #B07040 50%, #8B5520 100%)')
+                  : 'rgba(0,0,0,0.25)',
+                outline: isMyTurn && handTileIdsInZones.size === 0 ? '2px solid rgba(255,255,255,0.15)' : '2px solid rgba(0,0,0,0.1)',
+                boxShadow: isMyTurn && handTileIdsInZones.size === 0 ? '0 4px 10px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2)' : 'none',
+                transition: 'all 0.15s'
+              }}
+            >
+              <span style={{ color: isMyTurn && handTileIdsInZones.size === 0 ? 'white' : 'rgba(0,0,0,0.2)', fontSize: '1.6rem', lineHeight: 1, fontWeight: 300 }}>
+                {roomState?.deckCount === 0 ? '⏭' : '+'}
+              </span>
+              <span style={{ color: isMyTurn && handTileIdsInZones.size === 0 ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.2)', fontSize: '0.7rem', fontFamily: 'Russo One' }}>
+                {roomState?.deckCount ?? 0}
+              </span>
+            </button>
+            <button
+              onClick={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect()
+                const relY = e.clientY - rect.top
+                const half = rect.height / 2
+                if (relY < half) {
+                  handleEndTurn(false)
+                } else {
+                  handleUndo()
+                }
+              }}
+              title="Arriba: finalizar jugada · Abajo: deshacer última ficha"
+              style={{
+                width: 54, borderRadius: 14, border: 'none', cursor: 'pointer',
+                display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden',
+                transition: 'all 0.15s'
+              }}
+            >
+              <div style={{
+                flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                gap: 1, padding: '4px 0',
+                background: canFinalizeTurn
+                  ? 'linear-gradient(to bottom, #22A34A 0%, #168030 50%, #0A6010 100%)'
+                  : 'rgba(0,0,0,0.25)',
+                outline: canFinalizeTurn ? '2px solid rgba(74,222,128,0.4)' : '2px solid rgba(0,0,0,0.1)',
+                boxShadow: canFinalizeTurn ? '0 4px 10px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2)' : 'none',
+                borderBottom: '1px solid rgba(0,0,0,0.2)',
+                cursor: canFinalizeTurn ? 'pointer' : 'not-allowed',
+              }}>
+                <span style={{ color: canFinalizeTurn ? 'white' : 'rgba(0,0,0,0.2)', fontSize: '1.4rem', lineHeight: 1, fontWeight: 700 }}>✓</span>
+                <span style={{ color: canFinalizeTurn ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.2)', fontSize: '0.6rem', fontFamily: 'Russo One' }}>
+                  {hasChanges ? 'Terminar' : 'Listo'}
+                </span>
+              </div>
+              <div style={{
+                flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                gap: 1, padding: '4px 0',
+                background: isMyTurn && zones.length > 0
+                  ? 'linear-gradient(to bottom, #D4956A 0%, #B07040 50%, #8B5520 100%)'
+                  : 'rgba(0,0,0,0.25)',
+                outline: isMyTurn && zones.length > 0 ? '2px solid rgba(255,255,255,0.15)' : '2px solid rgba(0,0,0,0.1)',
+                boxShadow: isMyTurn && zones.length > 0 ? '0 4px 10px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2)' : 'none',
+                cursor: isMyTurn && zones.length > 0 ? 'pointer' : 'not-allowed',
+              }}>
+                <span style={{ color: isMyTurn && zones.length > 0 ? 'white' : 'rgba(0,0,0,0.2)', fontSize: '1.2rem', lineHeight: 1, fontWeight: 700 }}>↩</span>
+                <span style={{ color: isMyTurn && zones.length > 0 ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.2)', fontSize: '0.55rem', fontFamily: 'Russo One' }}>
+                  Deshacer
+                </span>
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

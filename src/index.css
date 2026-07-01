@@ -1,0 +1,186 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    font-family: 'Chakra Petch', sans-serif;
+    background: #0F0F23;
+    color: #E2E8F0;
+    overflow-x: hidden;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl;
+  }
+
+  .btn-primary {
+    @apply bg-purple-600 hover:bg-purple-500 text-white font-body font-semibold py-2 px-4 rounded-xl
+    transition-all duration-150 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed;
+    box-shadow: 0 0 20px rgba(124,58,237,0.3);
+  }
+  .btn-primary:not(:disabled):hover {
+    box-shadow: 0 0 30px rgba(124,58,237,0.6);
+    transform: translateY(-1px);
+  }
+
+  .btn-secondary {
+    @apply bg-white/10 hover:bg-white/20 text-white font-body font-semibold py-2 px-4 rounded-xl
+    border border-white/20 transition-all duration-150 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+}
+
+/* Scanlines overlay for retro feel */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* Neon text glow */
+.text-neon {
+  text-shadow: 0 0 10px rgba(167,139,250,0.8), 0 0 30px rgba(124,58,237,0.5);
+}
+
+/* ===== GAME SCREEN (blue rummikub style) ===== */
+
+.game-root {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(175deg, #0E2A5C 0%, #1A4A8F 40%, #1352A0 70%, #0D2550 100%);
+  overflow: hidden;
+}
+
+/* Cream tile (board & rack) */
+.ctile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Russo One', sans-serif;
+  font-weight: 700;
+  user-select: none;
+  background: linear-gradient(165deg, #FEFCF5 0%, #F2E8D5 100%);
+  border: 1px solid #D8C8A8;
+  border-bottom: 3px solid #B8A070;
+  box-shadow: 0 3px 6px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.95);
+  border-radius: 6px;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+.ctile-red    { color: #E53935; }
+.ctile-blue   { color: #2196F3; }
+.ctile-black  { color: #212121; }
+.ctile-yellow { color: #EAB308; }
+.ctile-joker  {
+  background: linear-gradient(135deg, #F59E0B, #EC4899, #8B5CF6);
+  border-color: #C084FC;
+  border-bottom-color: #7C3AED;
+  color: #FFFFFF;
+}
+
+/* Rack tile (larger, hover effect) */
+.rack-ctile {
+  width: 46px;
+  height: 60px;
+  font-size: 1.3rem;
+  cursor: grab;
+  position: relative;
+}
+.rack-ctile:hover:not(.rack-ctile-disabled):not(.rack-ctile-staged) {
+  transform: translateY(-8px) scale(1.06);
+  box-shadow: 0 10px 20px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.95);
+  z-index: 5;
+}
+.rack-ctile-staged {
+  opacity: 0.25;
+  cursor: default;
+  background: rgba(0,0,0,0.1) !important;
+  border-color: transparent !important;
+  border-bottom-color: transparent !important;
+  box-shadow: none !important;
+  color: transparent !important;
+}
+.rack-ctile-disabled {
+  cursor: default;
+}
+.rack-ctile-dragging {
+  opacity: 0.25;
+}
+
+/* Board tile (smaller) */
+.board-ctile {
+  width: 48px;
+  height: 62px;
+  font-size: 1.2rem;
+}
+
+/* Wood rack */
+.wood-rack {
+  background:
+    repeating-linear-gradient(90deg, transparent, transparent 6px, rgba(0,0,0,0.015) 6px, rgba(0,0,0,0.015) 7px),
+    linear-gradient(to bottom, #D4A96E 0%, #B8884A 40%, #9A6E35 80%, #7E5520 100%);
+  border-top: 4px solid #5C3D10;
+  box-shadow: inset 0 3px 8px rgba(0,0,0,0.25), 0 -4px 16px rgba(0,0,0,0.5);
+}
+
+/* Meld drop target highlight */
+.meld-drop-active {
+  border-color: rgba(251,191,36,0.7) !important;
+  background: rgba(251,191,36,0.12) !important;
+}
+
+/* Staging zone drop highlight */
+.staging-drop-active {
+  border-color: rgba(251,191,36,0.8) !important;
+  background: rgba(251,191,36,0.08) !important;
+}
+
+/* Rack drop target (returning pool tile to hand) */
+.wood-rack.rack-drop-active {
+  box-shadow:
+    inset 0 3px 8px rgba(0,0,0,0.25),
+    0 -4px 16px rgba(0,0,0,0.5),
+    inset 0 0 0 3px rgba(252,211,77,0.45);
+}
+
+/* Newly drawn tile — highlight animation */
+.rack-ctile-drawn {
+  animation: tile-drawn 2.6s ease-out forwards;
+  z-index: 10;
+  position: relative;
+}
+
+@keyframes tile-drawn {
+  0%   {
+    transform: translateY(-16px) scale(1.22);
+    box-shadow: 0 0 0 3px #FCD34D, 0 0 28px rgba(252,211,77,0.95), 0 16px 24px rgba(0,0,0,0.55);
+  }
+  20%  {
+    transform: translateY(-12px) scale(1.14);
+    box-shadow: 0 0 0 2px #FCD34D, 0 0 20px rgba(252,211,77,0.75), 0 12px 18px rgba(0,0,0,0.45);
+  }
+  55%  {
+    transform: translateY(-5px) scale(1.06);
+    box-shadow: 0 0 0 2px rgba(252,211,77,0.45), 0 0 12px rgba(252,211,77,0.35), 0 7px 12px rgba(0,0,0,0.35);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 3px 6px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.95);
+  }
+}
+
+/* Scroll */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); }
+::-webkit-scrollbar-thumb { background: rgba(124,58,237,0.5); border-radius: 3px; }
