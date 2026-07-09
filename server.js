@@ -1,11 +1,18 @@
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { createDeck, dealTiles, isValidMeld, calculateScore, generateRoomCode } from './src/game/rummikubEngine.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const distDir = path.join(__dirname, 'dist');
 
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: '*' } });
+
+app.use(express.static(distDir));
 
 const rooms = new Map(); // roomCode → roomState
 
@@ -341,5 +348,9 @@ io.on('connection', socket => {
   }
 });
 
-const PORT = 3001;
+app.get(/^(?!\/socket\.io).*/, (req, res) => {
+  res.sendFile(path.join(distDir, 'index.html'));
+});
+
+const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, () => console.log(`Server running on :${PORT}`));
