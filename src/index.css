@@ -16,19 +16,133 @@
     @apply bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl;
   }
 
+  /* ── BUTTONS — Glassmorphism + 3D Extrusion (like rack buttons) ── */
+
   .btn-primary {
-    @apply bg-purple-600 hover:bg-purple-500 text-white font-body font-semibold py-2 px-4 rounded-xl
-    transition-all duration-150 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed;
-    box-shadow: 0 0 20px rgba(124,58,237,0.3);
+    position: relative;
+    @apply text-white font-body font-semibold py-3 px-6 rounded-xl
+    transition-all duration-150 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed;
+    
+    background: rgba(124,58,237,0.12);
+    border: 1px solid rgba(124,58,237,0.25);
+    border-bottom: 1px solid rgba(124,58,237,0.06);
+    
+    box-shadow:
+      0 2px 0 rgba(0,0,0,0.25),
+      0 4px 0 rgba(0,0,0,0.18),
+      0 6px 0 rgba(0,0,0,0.10),
+      0 8px 0 rgba(0,0,0,0.05),
+      0 10px 25px rgba(0,0,0,0.3),
+      0 0 20px rgba(124,58,237,0.08),
+      inset 0 1px 0 rgba(255,255,255,0.2),
+      inset 0 -2px 4px rgba(0,0,0,0.08);
+  }
+  .btn-primary::after {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    border-radius: inherit;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(124,58,237,0.2), transparent 70%);
+    z-index: -1;
+  }
+  .btn-primary:not(:disabled):hover::after {
+    opacity: 1;
   }
   .btn-primary:not(:disabled):hover {
-    box-shadow: 0 0 30px rgba(124,58,237,0.6);
-    transform: translateY(-1px);
+    transform: translateY(-2px);
+    background: rgba(124,58,237,0.18);
+    border-color: rgba(124,58,237,0.35);
+    box-shadow:
+      0 4px 0 rgba(0,0,0,0.25),
+      0 8px 0 rgba(0,0,0,0.18),
+      0 12px 0 rgba(0,0,0,0.10),
+      0 16px 0 rgba(0,0,0,0.05),
+      0 12px 30px rgba(0,0,0,0.35),
+      0 0 40px rgba(124,58,237,0.18),
+      inset 0 1px 0 rgba(255,255,255,0.25),
+      inset 0 -2px 4px rgba(0,0,0,0.08);
+  }
+  .btn-primary:not(:disabled):active {
+    transform: translateY(5px);
+    box-shadow:
+      0 1px 0 rgba(0,0,0,0.15),
+      0 3px 0 rgba(0,0,0,0.08),
+      0 5px 15px rgba(0,0,0,0.2),
+      inset 0 1px 0 rgba(255,255,255,0.08);
+  }
+  .btn-primary:disabled {
+    opacity: 0.3;
+    transform: none !important;
+    box-shadow: none !important;
+    border-color: rgba(255,255,255,0.04) !important;
   }
 
   .btn-secondary {
-    @apply bg-white/10 hover:bg-white/20 text-white font-body font-semibold py-2 px-4 rounded-xl
-    border border-white/20 transition-all duration-150 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed;
+    position: relative;
+    @apply text-white/80 font-body font-semibold py-3 px-6 rounded-xl border
+    transition-all duration-150 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed;
+    
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    
+    box-shadow:
+      0 2px 0 rgba(0,0,0,0.25),
+      0 4px 0 rgba(0,0,0,0.18),
+      0 6px 0 rgba(0,0,0,0.10),
+      0 8px 0 rgba(0,0,0,0.05),
+      0 10px 20px rgba(0,0,0,0.25),
+      inset 0 1px 0 rgba(255,255,255,0.08);
+  }
+  .btn-secondary::after {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    border-radius: inherit;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(255,255,255,0.06), transparent 70%);
+    z-index: -1;
+  }
+  .btn-secondary:not(:disabled):hover::after {
+    opacity: 1;
+  }
+  .btn-secondary:not(:disabled):hover {
+    transform: translateY(-2px);
+    background: rgba(255,255,255,0.08);
+    border-color: rgba(255,255,255,0.2);
+    box-shadow:
+      0 4px 0 rgba(0,0,0,0.25),
+      0 8px 0 rgba(0,0,0,0.18),
+      0 12px 0 rgba(0,0,0,0.10),
+      0 10px 25px rgba(0,0,0,0.3),
+      inset 0 1px 0 rgba(255,255,255,0.12);
+  }
+  .btn-secondary:not(:disabled):active {
+    transform: translateY(5px);
+    box-shadow:
+      0 1px 0 rgba(0,0,0,0.15),
+      0 3px 0 rgba(0,0,0,0.08),
+      0 5px 15px rgba(0,0,0,0.2),
+      inset 0 1px 0 rgba(255,255,255,0.08);
+  }
+  .btn-secondary:disabled {
+    opacity: 0.3;
+    transform: none !important;
+    box-shadow: none !important;
+    border-color: rgba(255,255,255,0.04) !important;
+  }
+
+  /* ── BOARD AREA (felt-like background) ─────────────────────── */
+  .board-area {
+    background:
+      radial-gradient(ellipse at 30% 20%, rgba(120,80,200,0.05) 0%, transparent 60%),
+      radial-gradient(ellipse at 70% 80%, rgba(80,40,160,0.03) 0%, transparent 50%);
+    position: relative;
   }
 }
 
@@ -59,11 +173,15 @@ body::before {
   height: 100dvh;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(175deg, #0E2A5C 0%, #1A4A8F 40%, #1352A0 70%, #0D2550 100%);
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(100,80,160,0.08) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 100%, rgba(60,40,120,0.06) 0%, transparent 50%),
+    linear-gradient(175deg, #1E1B27 0%, #141219 40%, #0D0B12 70%, #07060A 100%);
   overflow: hidden;
 }
 
-/* Cream tile (board & rack) */
+/* ===== TILES (Fichas) — Realistic 3D Ivory/Ceramic ============ */
+
 .ctile {
   display: flex;
   align-items: center;
@@ -71,25 +189,104 @@ body::before {
   font-family: 'Russo One', sans-serif;
   font-weight: 700;
   user-select: none;
-  background: linear-gradient(165deg, #FEFCF5 0%, #F2E8D5 100%);
-  border: 1px solid #D8C8A8;
-  border-bottom: 3px solid #B8A070;
-  box-shadow: 0 3px 6px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.95);
-  border-radius: 6px;
-  transition: transform 0.1s ease, box-shadow 0.1s ease;
-}
-.ctile-red    { color: #E53935; }
-.ctile-blue   { color: #2196F3; }
-.ctile-black  { color: #212121; }
-.ctile-yellow { color: #EAB308; }
-.ctile-joker  {
-  background: linear-gradient(135deg, #F59E0B, #EC4899, #8B5CF6);
-  border-color: #C084FC;
-  border-bottom-color: #7C3AED;
-  color: #FFFFFF;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.32) 0%, rgba(255,255,255,0.08) 35%, transparent 60%),
+    linear-gradient(165deg, #FFFDF5 0%, #F5ECD0 30%, #EDE0BC 60%, #DCC8A0 100%);
+  border: 1px solid #C4B38A;
+  border-bottom: 3px solid #9E8A5C;
+  border-top-color: #F5EDD5;
+  border-left-color: #E8DDC4;
+  box-shadow:
+    0 2px 3px rgba(0,0,0,0.3),
+    0 4px 8px rgba(0,0,0,0.12),
+    0 8px 20px rgba(0,0,0,0.05),
+    inset 0 1px 0 rgba(255,255,255,0.9),
+    inset 0 -1px 2px rgba(0,0,0,0.06);
+  border-radius: 7px;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
 }
 
-/* Rack tile (larger, hover effect) */
+/* Color-specific tiles with tinted ivory and embossed text */
+.ctile-red {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.32) 0%, rgba(255,255,255,0.08) 35%, transparent 60%),
+    linear-gradient(165deg, #FFF5F0 0%, #F5E0D0 30%, #EDD0BC 60%, #DCC0A3 100%);
+  color: #C62828;
+  text-shadow:
+    0 1px 0 rgba(255,240,230,0.6),
+    0 -1px 0 rgba(120,20,20,0.25),
+    0 0 12px rgba(198,40,40,0.12);
+  border: 1px solid #D4A88A;
+  border-bottom: 3px solid #B87850;
+  border-top-color: #F5E0D0;
+  border-left-color: #E8D0BC;
+}
+
+.ctile-blue {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.32) 0%, rgba(255,255,255,0.08) 35%, transparent 60%),
+    linear-gradient(165deg, #F0F5FF 0%, #D0E0F5 30%, #BCCDE0 60%, #A0B8CC 100%);
+  color: #1565C0;
+  text-shadow:
+    0 1px 0 rgba(230,240,255,0.6),
+    0 -1px 0 rgba(10,30,80,0.25),
+    0 0 12px rgba(21,101,192,0.12);
+  border: 1px solid #8AB0D4;
+  border-bottom: 3px solid #5888B8;
+  border-top-color: #D0E0F5;
+  border-left-color: #BCD0E8;
+}
+
+.ctile-black {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.32) 0%, rgba(255,255,255,0.08) 35%, transparent 60%),
+    linear-gradient(165deg, #F5F5F0 0%, #E0E0D8 30%, #D0D0C8 60%, #C0C0B8 100%);
+  color: #212121;
+  text-shadow:
+    0 1px 0 rgba(255,255,245,0.5),
+    0 -1px 0 rgba(0,0,0,0.2);
+  border: 1px solid #A0A098;
+  border-bottom: 3px solid #787870;
+  border-top-color: #E8E8E0;
+  border-left-color: #D8D8D0;
+}
+
+.ctile-yellow {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.32) 0%, rgba(255,255,255,0.08) 35%, transparent 60%),
+    linear-gradient(165deg, #FFFDF0 0%, #F5EDC0 30%, #EDE0A0 60%, #DCC880 100%);
+  color: #B8860B;
+  text-shadow:
+    0 1px 0 rgba(255,250,220,0.6),
+    0 -1px 0 rgba(100,70,0,0.25),
+    0 0 12px rgba(184,134,11,0.15);
+  border: 1px solid #D4C080;
+  border-bottom: 3px solid #B09840;
+  border-top-color: #F0E8C0;
+  border-left-color: #E8DDC0;
+}
+
+/* Joker — vibrant rainbow with gold accents */
+.ctile-joker {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.25) 0%, rgba(255,255,255,0.05) 40%, transparent 60%),
+    linear-gradient(135deg, #FCD34D, #F472B6, #A78BFA);
+  border: 1px solid #E8C468;
+  border-bottom: 3px solid #B89428;
+  border-top-color: #F5E0A0;
+  border-left-color: #E8D490;
+  color: #FFFFFF;
+  text-shadow: 0 0 8px rgba(255,255,255,0.5), 0 1px 0 rgba(0,0,0,0.15);
+  box-shadow:
+    0 2px 3px rgba(0,0,0,0.35),
+    0 4px 8px rgba(0,0,0,0.15),
+    0 0 20px rgba(245,158,11,0.2),
+    inset 0 1px 0 rgba(255,255,255,0.5),
+    inset 0 -1px 2px rgba(0,0,0,0.08);
+}
+
+/* ===== RACK TILES ===== */
+
 .rack-ctile {
   width: 46px;
   height: 60px;
@@ -98,12 +295,18 @@ body::before {
   position: relative;
 }
 .rack-ctile:hover:not(.rack-ctile-disabled):not(.rack-ctile-staged) {
-  transform: translateY(-8px) scale(1.06);
-  box-shadow: 0 10px 20px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.95);
+  transform: translateY(-10px) scale(1.06);
+  box-shadow:
+    0 14px 28px rgba(0,0,0,0.5),
+    0 0 20px rgba(212,175,55,0.2),
+    0 4px 8px rgba(0,0,0,0.2),
+    inset 0 1px 0 rgba(255,255,255,0.95),
+    inset 0 -1px 2px rgba(0,0,0,0.06);
   z-index: 5;
 }
 .rack-ctile-staged {
   opacity: 0.25;
+  transition: opacity 0.2s;
   cursor: default;
   background: rgba(0,0,0,0.1) !important;
   border-color: transparent !important;
@@ -118,40 +321,187 @@ body::before {
   opacity: 0.25;
 }
 
-/* Board tile (smaller) */
+/* ===== BOARD TILES ===== */
+
 .board-ctile {
   width: 48px;
   height: 62px;
   font-size: 1.2rem;
 }
 
-/* Wood rack */
-.wood-rack {
+/* ===== RACK ACTION BUTTONS — Glassmorphism + 3D Extrusion ===== */
+
+.rack-btn {
+  position: relative;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.15s cubic-bezier(0.22, 1, 0.36, 1),
+              box-shadow 0.15s cubic-bezier(0.22, 1, 0.36, 1);
+
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+
+  box-shadow:
+    0 2px 0 rgba(0,0,0,0.25),
+    0 4px 0 rgba(0,0,0,0.18),
+    0 6px 0 rgba(0,0,0,0.10),
+    0 8px 0 rgba(0,0,0,0.05),
+    0 10px 20px rgba(0,0,0,0.25),
+    inset 0 1px 0 rgba(255,255,255,0.15),
+    inset 0 -2px 4px rgba(0,0,0,0.08);
+}
+
+.rack-btn::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(167,139,250,0.15), transparent 70%);
+  z-index: -1;
+}
+.rack-btn:hover:not(:disabled)::after {
+  opacity: 1;
+}
+.rack-btn:active:not(:disabled)::after {
+  opacity: 0.5;
+}
+
+.rack-btn:active:not(:disabled) {
+  transform: translateY(5px);
+  box-shadow:
+    0 1px 0 rgba(0,0,0,0.15),
+    0 3px 0 rgba(0,0,0,0.08),
+    0 5px 15px rgba(0,0,0,0.2),
+    inset 0 1px 0 rgba(255,255,255,0.08);
+}
+
+.rack-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+  border-color: rgba(255,255,255,0.04) !important;
+}
+
+/* Onyx variant — brighter glass for inactive action buttons */
+.rack-btn-onyx {
+  background: rgba(255,255,255,0.09);
+  border-color: rgba(255,255,255,0.18);
+  border-bottom-color: rgba(255,255,255,0.06);
+}
+.rack-btn-onyx::after {
+  background: radial-gradient(ellipse at center, rgba(255,255,255,0.07), transparent 70%);
+}
+
+/* Active (green) variant — for confirm/finalize button */
+.rack-btn-active {
+  background: rgba(34,197,94,0.12);
+  border-color: rgba(34,197,94,0.25);
+  border-bottom-color: rgba(34,197,94,0.08);
+  box-shadow:
+    0 2px 0 rgba(0,0,0,0.25),
+    0 4px 0 rgba(0,0,0,0.18),
+    0 6px 0 rgba(0,0,0,0.10),
+    0 8px 0 rgba(0,0,0,0.05),
+    0 10px 20px rgba(0,0,0,0.25),
+    0 0 20px rgba(34,197,94,0.1),
+    inset 0 1px 0 rgba(255,255,255,0.2),
+    inset 0 -2px 4px rgba(0,0,0,0.08);
+}
+.rack-btn-active::after {
+  background: radial-gradient(ellipse at center, rgba(34,197,94,0.2), transparent 70%);
+}
+
+/* Draw (blue) variant — for draw tile button */
+.rack-btn-draw {
+  background: rgba(59,130,246,0.12);
+  border-color: rgba(59,130,246,0.25);
+  border-bottom-color: rgba(59,130,246,0.08);
+  box-shadow:
+    0 2px 0 rgba(0,0,0,0.25),
+    0 4px 0 rgba(0,0,0,0.18),
+    0 6px 0 rgba(0,0,0,0.10),
+    0 8px 0 rgba(0,0,0,0.05),
+    0 10px 20px rgba(0,0,0,0.25),
+    0 0 20px rgba(59,130,246,0.1),
+    inset 0 1px 0 rgba(255,255,255,0.2),
+    inset 0 -2px 4px rgba(0,0,0,0.08);
+}
+.rack-btn-draw::after {
+  background: radial-gradient(ellipse at center, rgba(59,130,246,0.2), transparent 70%);
+}
+
+/* Undo (amber) variant — for undo button */
+.rack-btn-undo {
+  background: rgba(245,158,11,0.12);
+  border-color: rgba(245,158,11,0.25);
+  border-bottom-color: rgba(245,158,11,0.08);
+  box-shadow:
+    0 2px 0 rgba(0,0,0,0.25),
+    0 4px 0 rgba(0,0,0,0.18),
+    0 6px 0 rgba(0,0,0,0.10),
+    0 8px 0 rgba(0,0,0,0.05),
+    0 10px 20px rgba(0,0,0,0.25),
+    0 0 20px rgba(245,158,11,0.1),
+    inset 0 1px 0 rgba(255,255,255,0.2),
+    inset 0 -2px 4px rgba(0,0,0,0.08);
+}
+.rack-btn-undo::after {
+  background: radial-gradient(ellipse at center, rgba(245,158,11,0.2), transparent 70%);
+}
+
+/* Gradient label for text inside buttons */
+.rack-btn-label {
+  background: linear-gradient(135deg, #A78BFA, #7C3AED);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Icon size helper for SVG icons */
+.rack-btn-icon {
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+
+/* Dark onyx rack */
+.rack-tray {
   background:
-    repeating-linear-gradient(90deg, transparent, transparent 6px, rgba(0,0,0,0.015) 6px, rgba(0,0,0,0.015) 7px),
-    linear-gradient(to bottom, #D4A96E 0%, #B8884A 40%, #9A6E35 80%, #7E5520 100%);
-  border-top: 4px solid #5C3D10;
-  box-shadow: inset 0 3px 8px rgba(0,0,0,0.25), 0 -4px 16px rgba(0,0,0,0.5);
+    repeating-linear-gradient(90deg, transparent, transparent 6px, rgba(255,255,255,0.02) 6px, rgba(255,255,255,0.02) 7px),
+    linear-gradient(to bottom, #2A2E38 0%, #1B1E25 45%, #101218 85%, #0A0B0E 100%);
+  border-top: 3px solid #C9A227;
+  box-shadow:
+    inset 0 3px 8px rgba(0,0,0,0.5),
+    0 -6px 20px rgba(0,0,0,0.6),
+    inset 0 1px 0 rgba(255,255,255,0.04);
 }
 
 /* Meld drop target highlight */
 .meld-drop-active {
-  border-color: rgba(251,191,36,0.7) !important;
-  background: rgba(251,191,36,0.12) !important;
+  border-color: rgba(212,175,55,0.75) !important;
+  background: rgba(212,175,55,0.12) !important;
+  box-shadow: 0 0 20px rgba(212,175,55,0.15), inset 0 0 30px rgba(212,175,55,0.05) !important;
 }
 
 /* Staging zone drop highlight */
 .staging-drop-active {
-  border-color: rgba(251,191,36,0.8) !important;
-  background: rgba(251,191,36,0.08) !important;
+  border-color: rgba(212,175,55,0.8) !important;
+  background: rgba(212,175,55,0.08) !important;
 }
 
 /* Rack drop target (returning pool tile to hand) */
-.wood-rack.rack-drop-active {
+.rack-tray.rack-drop-active {
   box-shadow:
-    inset 0 3px 8px rgba(0,0,0,0.25),
-    0 -4px 16px rgba(0,0,0,0.5),
-    inset 0 0 0 3px rgba(252,211,77,0.45);
+    inset 0 3px 8px rgba(0,0,0,0.5),
+    0 -6px 20px rgba(0,0,0,0.6),
+    inset 0 0 0 3px rgba(212,175,55,0.5);
 }
 
 /* Newly drawn tile — highlight animation */
@@ -163,20 +513,34 @@ body::before {
 
 @keyframes tile-drawn {
   0%   {
-    transform: translateY(-16px) scale(1.22);
-    box-shadow: 0 0 0 3px #FCD34D, 0 0 28px rgba(252,211,77,0.95), 0 16px 24px rgba(0,0,0,0.55);
+    transform: translateY(-20px) scale(1.28);
+    box-shadow:
+      0 0 0 3px #E8C468,
+      0 0 30px rgba(212,175,55,0.9),
+      0 20px 30px rgba(0,0,0,0.6);
   }
   20%  {
-    transform: translateY(-12px) scale(1.14);
-    box-shadow: 0 0 0 2px #FCD34D, 0 0 20px rgba(252,211,77,0.75), 0 12px 18px rgba(0,0,0,0.45);
+    transform: translateY(-14px) scale(1.16);
+    box-shadow:
+      0 0 0 2px #E8C468,
+      0 0 22px rgba(212,175,55,0.7),
+      0 14px 20px rgba(0,0,0,0.5);
   }
   55%  {
-    transform: translateY(-5px) scale(1.06);
-    box-shadow: 0 0 0 2px rgba(252,211,77,0.45), 0 0 12px rgba(252,211,77,0.35), 0 7px 12px rgba(0,0,0,0.35);
+    transform: translateY(-6px) scale(1.06);
+    box-shadow:
+      0 0 0 2px rgba(212,175,55,0.4),
+      0 0 12px rgba(212,175,55,0.3),
+      0 8px 14px rgba(0,0,0,0.35);
   }
   100% {
     transform: translateY(0) scale(1);
-    box-shadow: 0 3px 6px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.95);
+    box-shadow:
+      0 2px 3px rgba(0,0,0,0.3),
+      0 4px 8px rgba(0,0,0,0.12),
+      0 8px 20px rgba(0,0,0,0.05),
+      inset 0 1px 0 rgba(255,255,255,0.9),
+      inset 0 -1px 2px rgba(0,0,0,0.06);
   }
 }
 

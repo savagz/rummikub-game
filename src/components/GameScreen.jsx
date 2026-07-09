@@ -1,10 +1,19 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import socket from '../socket.js'
 import { isValidMeld, calculateScore, tryReplaceJoker } from '../game/rummikubEngine.js'
+import { TAP, HOVER } from '../motion.js'
 
 const DIFF_SECS = { easy: 120, medium: 90, hard: 40 }
 const COLOR_ORDER = { red: 0, blue: 1, black: 2, yellow: 3 }
 const NUM_COLOR = { red: '#E53935', blue: '#2196F3', black: '#212121', yellow: '#EAB308' }
+
+function timerLevel(left, total) {
+  return left <= 10 ? 'red' : left <= total * 0.3 ? 'amber' : 'green'
+}
+const RING_COLOR = { red: '#EF4444', amber: '#F59E0B', green: '#22C55E' }
+const BAR_COLOR = { red: '#DC2626', amber: '#D97706', green: '#16A34A' }
+const TEXT_COLOR = { red: '#B91C1C', amber: '#B45309', green: '#166534' }
 
 let _zoneId = 0
 function nextZoneId() { return `z-${++_zoneId}` }
@@ -58,7 +67,7 @@ function useTimer(turnStartedAt, total, active) {
 function CircularTimer({ left, total }) {
   const r = 34, circ = 2 * Math.PI * r
   const pct = Math.max(0, left / total)
-  const color = left <= 10 ? '#EF4444' : left <= total * 0.3 ? '#F59E0B' : '#22C55E'
+  const color = RING_COLOR[timerLevel(left, total)]
   return (
     <svg width="80" height="80" viewBox="0 0 80 80" className="absolute inset-0 pointer-events-none">
       <circle cx="40" cy="40" r={r} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="3" />
@@ -128,7 +137,14 @@ function CreamTile({ tile, className = '', style = {}, ...rest }) {
 
 function BoardMeld({ meld, originalIdx, isDropTarget, canInteract, draggingTileId, onTileDragStart, onMeldDragStart, onMeldDragEnd, onDrop, onDragOverMeld }) {
   return (
-    <div className="flex flex-col gap-1">
+    <motion.div
+      layout
+      initial={{ opacity: 0, scale: 0.9 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.9 }}
+      transition={{ duration: 0.2 }}
+      className="flex flex-col gap-1"
+    >
       <div
         className={`flex gap-1 p-2 rounded-xl border transition-all duration-150
           ${isDropTarget ? 'meld-drop-active' : 'border-white/10 bg-white/5'}
@@ -156,20 +172,26 @@ function BoardMeld({ meld, originalIdx, isDropTarget, canInteract, draggingTileI
           />
         ))}
       </div>
-      
-    </div>
+
+    </motion.div>
   )
 }
 
-function Zone({ zone, canInteract, isDropTarget, dragTileId, onZoneDrop, onTileDragStart, onTileDragEnd, onClearZone, onDoubleClickTile, fromBoard }) {
+function Zone({ zone, canInteract, isDropTarget, dragTileId, onZoneDrop, onTileDragStart, onTileDragEnd, onDoubleClickTile, fromBoard }) {
   const valid = zone.tiles.length >= 3 && isValidMeld(zone.tiles)
-  const showStatus = zone.tiles.length > 0
 
   return (
-    <div className="flex flex-col gap-1">
+    <motion.div
+      layout
+      initial={{ opacity: 0, scale: 0.85, y: 8 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.85 }}
+      transition={{ duration: 0.2 }}
+      className="flex flex-col gap-1"
+    >
       <div
         className={`flex gap-1 p-2 rounded-xl border-2 transition-all duration-150
-          ${isDropTarget ? 'meld-drop-active' : 'border-green-500/30 bg-green-900/10'}`}
+          ${isDropTarget ? 'meld-drop-active' : valid ? 'border-green-500/60 bg-green-900/20' : 'border-red-500/40 bg-red-900/10'}`}
         onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
         onDrop={(e) => onZoneDrop(e, zone.id, zone.tiles.length)}
       >
@@ -191,28 +213,8 @@ function Zone({ zone, canInteract, isDropTarget, dragTileId, onZoneDrop, onTileD
             title={fromBoard.has(tile.id) ? 'Ficha del tablero' : 'Doble clic para devolver a mano'}
           />
         ))}
-        {showStatus && (
-          <div className="flex items-center ml-1" style={{ fontSize: 10, whiteSpace: 'nowrap' }}>
-            <span style={{ color: valid ? '#4ADE80' : '#F87171' }}>
-              {valid ? '✓' : zone.tiles.length < 3 ? `${zone.tiles.length}/3` : '✗'}
-            </span>
-          </div>
-        )}
       </div>
-      {canInteract && (
-        <button
-          onClick={() => onClearZone(zone.id)}
-          style={{
-            fontSize: 9, padding: '2px 6px', borderRadius: 4, border: '1px solid rgba(239,68,68,0.3)',
-            background: 'rgba(239,68,68,0.08)', color: 'rgba(239,68,68,0.7)', cursor: 'pointer',
-            fontFamily: 'Chakra Petch', textAlign: 'center', transition: 'all 0.15s', alignSelf: 'flex-start'
-          }}
-          title="Devolver todas las fichas de esta zona"
-        >
-          ✕
-        </button>
-      )}
-    </div>
+    </motion.div>
   )
 }
 
@@ -227,6 +229,7 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
   const [localError, setLocalError] = useState(null)
   const [drawnTileId, setDrawnTileId] = useState(null)
   const [opponentDraft, setOpponentDraft] = useState(null)
+  const [turnFlash, setTurnFlash] = useState(false)
 
   const autoDrawnRef = useRef(false)
   const pendingDrawRef = useRef(false)
@@ -355,6 +358,10 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
   useEffect(() => {
     if (isMyTurn && !prevIsMyTurnRef.current && isPlaying) {
       sound('turn')
+      setTurnFlash(true)
+      prevIsMyTurnRef.current = isMyTurn
+      const id = setTimeout(() => setTurnFlash(false), 900)
+      return () => clearTimeout(id)
     }
     prevIsMyTurnRef.current = isMyTurn
   }, [isMyTurn, isPlaying, sound])
@@ -419,14 +426,20 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
   }
 
   function sortTiles(tiles) {
-    const nonJokers = tiles.filter(t => !t.isJoker)
-    const jokers = tiles.filter(t => t.isJoker)
+    const seen = new Set()
+    const unique = tiles.filter(t => {
+      if (!t || seen.has(t.id)) return false
+      seen.add(t.id)
+      return true
+    })
+    const nonJokers = unique.filter(t => !t.isJoker)
+    const jokers = unique.filter(t => t.isJoker)
     const sortByNumColor = arr => [...arr].sort((a, b) => {
       if (a.number !== b.number) return a.number - b.number
       return (COLOR_ORDER[a.color] ?? 4) - (COLOR_ORDER[b.color] ?? 4)
     })
     if (jokers.length === 0 || nonJokers.length < 2) {
-      return sortByNumColor(tiles)
+      return sortByNumColor(unique)
     }
     const colors = new Set(nonJokers.map(t => t.color))
     if (colors.size !== 1) {
@@ -458,7 +471,7 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
       result.push(sorted[i])
       if (i < sorted.length - 1) {
         const gap = sorted[i + 1].number - sorted[i].number - 1
-        for (let g = 0; g < gap; g++) result.push(jokers[jIdx++])
+        for (let g = 0; g < Math.min(gap, jokers.length - jIdx); g++) result.push(jokers[jIdx++])
       }
     }
     for (let i = 0; i < extraAfter; i++) result.push(jokers[jIdx++])
@@ -477,7 +490,15 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
     const clean = tiles.filter(Boolean)
     setZones(prev => prev.map(z => {
       if (z.id !== zoneId) return z
-      const newTiles = [...z.tiles, ...clean]
+      const existingIds = new Set(z.tiles.map(t => t.id))
+      const toAdd = clean.filter(t => !existingIds.has(t.id))
+      if (toAdd.length === 0) return z
+      let newTiles
+      if (insertAt !== undefined && insertAt >= 0 && insertAt <= z.tiles.length) {
+        newTiles = [...z.tiles.slice(0, insertAt), ...toAdd, ...z.tiles.slice(insertAt)]
+      } else {
+        newTiles = [...z.tiles, ...toAdd]
+      }
       return { ...z, tiles: sortTiles(newTiles) }
     }))
   }
@@ -494,10 +515,6 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
       return newZones
     })
     return removed
-  }
-
-  function removeZone(zoneId) {
-    setZones(prev => prev.filter(z => z.id !== zoneId))
   }
 
   function affectMeld(meldIdx) {
@@ -571,6 +588,7 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
   }
 
   function handleBoardTileDropOnMeld(tileId, srcMeldIdx, targetMeldIdx) {
+    if (srcMeldIdx === targetMeldIdx) return
     const srcMeld = board[srcMeldIdx]
     const targetMeld = board[targetMeldIdx]
     if (!srcMeld || !targetMeld || !canInteractWithBoard) return
@@ -638,16 +656,6 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
     if (!handMap.has(tileId)) return
     removeTileFromZone(zoneId, tileId)
     sound('place')
-  }
-
-  function handleCancelZone(zoneId) {
-    const zone = zones.find(z => z.id === zoneId)
-    if (!zone) return
-    const boardTiles = zone.tiles.filter(t => !handMap.has(t.id))
-    const handTiles = zone.tiles.filter(t => handMap.has(t.id))
-    removeZone(zoneId)
-    if (boardTiles.length > 0) createZone(boardTiles)
-    if (handTiles.length > 0) sound('place')
   }
 
   function handleUndo() {
@@ -904,6 +912,32 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
   return (
     <div className="game-root">
 
+      {/* ── SVG defs for icon gradients ──────────────────────────────── */}
+      <svg style={{ position: 'absolute', width: 0, height: 0, pointerEvents: 'none' }}>
+        <defs>
+          <linearGradient id="icon-grad-white" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#ffffff" />
+            <stop offset="100%" stopColor="rgba(255,255,255,0.6)" />
+          </linearGradient>
+          <linearGradient id="icon-grad-green" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#4ADE80" />
+            <stop offset="100%" stopColor="#16A34A" />
+          </linearGradient>
+          <linearGradient id="icon-grad-blue" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#60A5FA" />
+            <stop offset="100%" stopColor="#2563EB" />
+          </linearGradient>
+          <linearGradient id="icon-grad-amber" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#FCD34D" />
+            <stop offset="100%" stopColor="#D97706" />
+          </linearGradient>
+          <linearGradient id="icon-grad-red" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#F87171" />
+            <stop offset="100%" stopColor="#DC2626" />
+          </linearGradient>
+        </defs>
+      </svg>
+
       {/* ── TOP BAR ─────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 16px', background: 'rgba(0,0,0,0.35)', borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
         <div className="flex items-center gap-3">
@@ -928,15 +962,34 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
             </span>
           )}
         </div>
-        <div style={{
-          padding: '3px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600,
-          background: isMyTurn ? 'rgba(34,197,94,0.2)' : 'rgba(255,255,255,0.05)',
-          color: isMyTurn ? '#4ADE80' : '#94A3B8',
-          border: `1px solid ${isMyTurn ? 'rgba(34,197,94,0.4)' : 'rgba(255,255,255,0.1)'}`,
-        }}>
+        <motion.div
+          animate={turnFlash ? { scale: [1, 1.08, 1] } : { scale: 1 }}
+          transition={{ duration: 0.4 }}
+          style={{
+            padding: '3px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600,
+            background: isMyTurn ? 'rgba(34,197,94,0.2)' : 'rgba(255,255,255,0.05)',
+            color: isMyTurn ? '#4ADE80' : '#94A3B8',
+            border: `1px solid ${isMyTurn ? 'rgba(34,197,94,0.4)' : 'rgba(255,255,255,0.1)'}`,
+          }}>
           {isMyTurn ? '¡Tu turno!' : `Turno: ${currentPlayer?.name ?? '...'}`}
-        </div>
+        </motion.div>
       </div>
+
+      {/* ── TURN-CHANGE FLASH ──────────────────────────────────────────── */}
+      <AnimatePresence>
+        {turnFlash && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: [0, 0.15, 0] }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.9 }}
+            style={{
+              position: 'fixed', inset: 0, background: 'rgba(74,222,128,0.5)',
+              pointerEvents: 'none', zIndex: 50,
+            }}
+          />
+        )}
+      </AnimatePresence>
 
       {/* ── PLAYERS ─────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', justifyContent: 'center', gap: 28, padding: '10px 16px 8px', background: 'rgba(0,0,0,0.2)', flexShrink: 0, borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
@@ -954,6 +1007,7 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
 
       {/* ── BOARD ───────────────────────────────────────────────────────── */}
       <div
+        className="board-area"
         style={{ flex: 1, overflow: 'auto', position: 'relative', padding: 16 }}
         onDragOver={(e) => { e.preventDefault(); if (dropTarget !== 'board') setDropTarget('board') }}
         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDropTarget(null) }}
@@ -967,17 +1021,24 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
           <div style={{ fontSize: '2.5rem', color: 'rgba(255,255,255,0.05)', letterSpacing: '0.05em' }}>Rummikub</div>
         </div>
 
-        {localError && (
-          <div style={{
-            position: 'sticky', top: 0, zIndex: 20, marginBottom: 10,
-            background: 'rgba(220,38,38,0.2)', border: '1px solid rgba(220,38,38,0.4)',
-            borderRadius: 10, padding: '8px 14px', color: '#FCA5A5',
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.85rem'
-          }}>
-            {localError}
-            <button onClick={() => setLocalError(null)} style={{ background: 'none', border: 'none', color: '#FCA5A5', cursor: 'pointer', marginLeft: 8, fontSize: '1rem' }}>✕</button>
-          </div>
-        )}
+        <AnimatePresence>
+          {localError && (
+            <motion.div
+              initial={{ opacity: 0, y: -16, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -16, scale: 0.95 }}
+              transition={{ duration: 0.25 }}
+              style={{
+                position: 'sticky', top: 0, zIndex: 20, marginBottom: 10,
+                background: 'rgba(220,38,38,0.2)', border: '1px solid rgba(220,38,38,0.4)',
+                borderRadius: 10, padding: '8px 14px', color: '#FCA5A5',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.85rem'
+              }}>
+              {localError}
+              <button onClick={() => setLocalError(null)} style={{ background: 'none', border: 'none', color: '#FCA5A5', cursor: 'pointer', marginLeft: 8, fontSize: '1rem' }}>✕</button>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <div style={{ position: 'relative', zIndex: 1 }}>
           {board.length === 0 && zones.length === 0 && (
@@ -986,26 +1047,29 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
             </div>
           )}
 
-          <div className="flex flex-wrap gap-3">
-            {visibleBoard.map(({ meld, i }) => (
-              <BoardMeld
-                key={i}
-                meld={meld}
-                originalIdx={i}
-                isDropTarget={dropTarget === `meld-${i}`}
-                draggingTileId={dragTileId}
-                canInteract={canInteractWithBoard && !me?.hasInitialMeld ? false : canInteractWithBoard}
-                onTileDragStart={onBoardTileDragStart}
-                onMeldDragStart={onBoardMeldDragStart}
-                onMeldDragEnd={onDragEnd}
-                onDrop={onMeldDrop}
-                onDragOverMeld={() => setDropTarget(`meld-${i}`)}
-              />
-            ))}
-          </div>
+          <motion.div layout className="flex flex-wrap gap-3">
+            <AnimatePresence>
+              {visibleBoard.map(({ meld, i }) => (
+                <BoardMeld
+                  key={i}
+                  meld={meld}
+                  originalIdx={i}
+                  isDropTarget={dropTarget === `meld-${i}`}
+                  draggingTileId={dragTileId}
+                  canInteract={canInteractWithBoard && !me?.hasInitialMeld ? false : canInteractWithBoard}
+                  onTileDragStart={onBoardTileDragStart}
+                  onMeldDragStart={onBoardMeldDragStart}
+                  onMeldDragEnd={onDragEnd}
+                  onDrop={onMeldDrop}
+                  onDragOverMeld={() => setDropTarget(`meld-${i}`)}
+                />
+              ))}
+            </AnimatePresence>
+          </motion.div>
 
           {zones.length > 0 && (
-            <div className="flex flex-wrap gap-3 mt-3">
+            <motion.div layout className="flex flex-wrap gap-3 mt-3">
+            <AnimatePresence>
               {zones.map(zone => (
                 <Zone
                   key={zone.id}
@@ -1016,32 +1080,40 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
                   onZoneDrop={onZoneDrop}
                   onTileDragStart={onZoneTileDragStart}
                   onTileDragEnd={onDragEnd}
-                  onClearZone={handleCancelZone}
-                  onDoubleClickTile={handleDoubleClickZoneTile}
+                   onDoubleClickTile={handleDoubleClickZoneTile}
                   fromBoard={allZoneBoardTileIds}
                 />
               ))}
-            </div>
+            </AnimatePresence>
+            </motion.div>
           )}
 
-          {opponentDraft && opponentDraft.zones.length > 0 && (
-            <div className="mt-4">
-              <div style={{ fontSize: 10, color: 'rgba(251,191,36,0.6)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>
-                {roomState?.players?.find(p => p.id === opponentDraft.playerId)?.name ?? 'Oponente'} está reorganizando...
-              </div>
-              <div className="flex flex-wrap gap-3 opacity-60 pointer-events-none">
-                {opponentDraft.zones.map(zone => (
-                  <div key={zone.id} className="flex gap-1 p-2 rounded-xl border border-yellow-500/30 bg-yellow-900/10">
-                    {zone.tiles.map(tile => (
-                      <CreamTile key={tile.id} tile={tile} className="board-ctile" />
-                    ))}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          <AnimatePresence>
+            {opponentDraft && opponentDraft.zones.length > 0 && (
+              <motion.div
+                className="mt-4"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.3 }}
+              >
+                <div style={{ fontSize: 10, color: 'rgba(251,191,36,0.6)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>
+                  {roomState?.players?.find(p => p.id === opponentDraft.playerId)?.name ?? 'Oponente'} está reorganizando...
+                </div>
+                <div className="flex flex-wrap gap-3 opacity-60 pointer-events-none">
+                  {opponentDraft.zones.map(zone => (
+                    <div key={zone.id} className="flex gap-1 p-2 rounded-xl border border-yellow-500/30 bg-yellow-900/10">
+                      {zone.tiles.map(tile => (
+                        <CreamTile key={tile.id} tile={tile} className="board-ctile" />
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-          {isMyTurn && (
+          {isMyTurn && !me?.hasInitialMeld && (
             <div
               className={`flex items-center justify-center min-h-16 mt-3 p-4 rounded-2xl border-2 border-dashed transition-all duration-150
                 ${dropTarget === 'board' ? 'staging-drop-active' : 'border-white/15 bg-white/3'}`}
@@ -1073,7 +1145,7 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
 
       {/* ── RACK ────────────────────────────────────────────────────────── */}
       <div
-        className={`wood-rack ${dropTarget === 'rack' ? 'rack-drop-active' : ''}`}
+        className={`rack-tray ${dropTarget === 'rack' ? 'rack-drop-active' : ''}`}
         style={{ flexShrink: 0, padding: '10px 12px 12px' }}
         onDragOver={(e) => { if (dragFrom.current === 'zoneTile') { e.preventDefault(); setDropTarget('rack') } }}
         onDragLeave={() => setDropTarget(null)}
@@ -1081,62 +1153,42 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
       >
         <div className="flex items-stretch gap-3">
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0, width: 54 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <span style={{ fontSize: 8, color: 'rgba(0,0,0,0.4)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>tiempo</span>
-              <span style={{ fontSize: 10, fontFamily: 'Russo One', fontWeight: 700,
-                color: timeLeft <= 10 ? '#B91C1C' : timeLeft <= totalSecs * 0.3 ? '#B45309' : '#166534'
-              }}>{isMyTurn ? `${timeLeft}s` : '—'}</span>
-            </div>
-            <div style={{ height: 4, borderRadius: 2, background: 'rgba(0,0,0,0.2)', overflow: 'hidden' }}>
-              {isMyTurn && (
-                <div style={{
-                  height: '100%', borderRadius: 2, transition: 'width 0.5s linear, background 0.3s',
-                  width: `${(timeLeft / totalSecs) * 100}%`,
-                  background: timeLeft <= 10 ? '#DC2626' : timeLeft <= totalSecs * 0.3 ? '#D97706' : '#16A34A'
-                }} />
-              )}
-            </div>
-            <button
-              onClick={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect()
-                const relY = e.clientY - rect.top
-                const half = rect.height / 2
-                setSortBy(s => s === (relY < half ? 'number' : 'color') ? null : (relY < half ? 'number' : 'color'))
-              }}
-              title="Superior: ordenar por nº · Inferior: ordenar por color"
+            <div className="flex flex-col gap-1 shrink-0" style={{ width: 56 }}>
+            <motion.button
+              onClick={() => setSortBy(s => s === 'number' ? null : 'number')}
+              whileHover={HOVER}
+              whileTap={TAP}
+              title="Ordenar por número"
+              className="rack-btn rack-btn-onyx flex-1 flex items-center justify-center"
               style={{
-                flex: 1, borderRadius: 14, border: 'none', cursor: 'pointer',
-                display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden',
-                background: 'linear-gradient(to bottom, #D4956A 0%, #B07040 50%, #8B5520 100%)',
-                outline: sortBy ? '2px solid rgba(252,211,77,0.5)' : '2px solid rgba(255,255,255,0.15)',
-                boxShadow: sortBy ? '0 2px 6px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.15)' : '0 4px 10px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2)',
-                transition: 'all 0.15s'
+                outline: sortBy === 'number' ? '2px solid rgba(212,175,55,0.65)' : '2px solid rgba(255,255,255,0.12)',
+                boxShadow: sortBy === 'number'
+                  ? '0 2px 8px rgba(0,0,0,0.5), 0 0 16px rgba(212,175,55,0.2), inset 0 1px 0 rgba(255,255,255,0.15)'
+                  : '0 4px 10px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.15), inset 0 -1px 0 rgba(0,0,0,0.2)',
               }}
             >
-              <div style={{
-                flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                background: sortBy === 'number' ? 'rgba(0,0,0,0.2)' : 'transparent',
-                borderBottom: '1px solid rgba(0,0,0,0.15)',
-                gap: 0, transition: 'background 0.15s'
-              }}>
-                <span style={{ color: 'white', fontSize: '1.1rem', lineHeight: 1, fontWeight: 700 }}>#</span>
-                <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.55rem', fontFamily: 'Russo One' }}>777</span>
-              </div>
-              <div style={{
-                flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                background: sortBy === 'color' ? 'rgba(0,0,0,0.2)' : 'transparent',
-                gap: 0, transition: 'background 0.15s'
-              }}>
-                <span style={{ color: 'white', fontSize: '1.1rem', lineHeight: 1, fontWeight: 700 }}>≡</span>
-                <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.55rem', fontFamily: 'Russo One' }}>789</span>
-              </div>
-            </button>
+              <span className="rack-btn-label font-heading" style={{ fontSize: '1rem' }}>777</span>
+            </motion.button>
+            <motion.button
+              onClick={() => setSortBy(s => s === 'color' ? null : 'color')}
+              whileHover={HOVER}
+              whileTap={TAP}
+              title="Ordenar por color"
+              className="rack-btn rack-btn-onyx flex-1 flex items-center justify-center"
+              style={{
+                outline: sortBy === 'color' ? '2px solid rgba(212,175,55,0.65)' : '2px solid rgba(255,255,255,0.12)',
+                boxShadow: sortBy === 'color'
+                  ? '0 2px 8px rgba(0,0,0,0.5), 0 0 16px rgba(212,175,55,0.2), inset 0 1px 0 rgba(255,255,255,0.15)'
+                  : '0 4px 10px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.15), inset 0 -1px 0 rgba(0,0,0,0.2)',
+              }}
+            >
+              <span className="rack-btn-label font-heading" style={{ fontSize: '1rem' }}>789</span>
+            </motion.button>
           </div>
 
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
+          <div className="flex-1 flex flex-col gap-1 items-center">
             {[row1, row2].map((row, rowIdx) => (
-              <div key={rowIdx} style={{ display: 'flex', gap: 4, flexWrap: 'nowrap', justifyContent: 'center' }}>
+              <div key={rowIdx} className="flex gap-1 flex-nowrap justify-center">
                 {row.map(tile => {
                   const inPlay = zoneTileIds.has(tile.id)
                   const dragging = dragTileId === tile.id
@@ -1166,83 +1218,74 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
             ))}
           </div>
 
-          <div style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'stretch' }}>
-            <button
+          <div className="flex gap-1 shrink-0 items-stretch">
+            <motion.button
               onClick={isMyTurn && handTileIdsInZones.size === 0 ? drawTile : undefined}
               disabled={!isMyTurn || handTileIdsInZones.size > 0}
+              whileHover={isMyTurn && handTileIdsInZones.size === 0 ? HOVER : {}}
+              whileTap={isMyTurn && handTileIdsInZones.size === 0 ? TAP : {}}
               title={
                 handTileIdsInZones.size > 0
                   ? 'Debes confirmar o cancelar tu jugada antes de robar'
                   : roomState?.deckCount === 0 ? 'Pozo agotado — pasar turno' : 'Robar ficha'
               }
+              className={`rack-btn ${isMyTurn && handTileIdsInZones.size === 0 && roomState?.deckCount !== 0 ? 'rack-btn-draw' : ''}`}
               style={{
-                width: 54, borderRadius: 14, border: 'none', cursor: isMyTurn && handTileIdsInZones.size === 0 ? 'pointer' : 'not-allowed',
-                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, padding: '4px 0',
-                background: isMyTurn && handTileIdsInZones.size === 0
-                  ? (roomState?.deckCount === 0 ? 'rgba(239,68,68,0.4)' : 'linear-gradient(to bottom, #D4956A 0%, #B07040 50%, #8B5520 100%)')
-                  : 'rgba(0,0,0,0.25)',
-                outline: isMyTurn && handTileIdsInZones.size === 0 ? '2px solid rgba(255,255,255,0.15)' : '2px solid rgba(0,0,0,0.1)',
-                boxShadow: isMyTurn && handTileIdsInZones.size === 0 ? '0 4px 10px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2)' : 'none',
-                transition: 'all 0.15s'
+                width: 56,
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, padding: '6px 0',
+                ...(isMyTurn && handTileIdsInZones.size === 0 && roomState?.deckCount === 0
+                  ? { background: 'rgba(239,68,68,0.15)', borderColor: 'rgba(239,68,68,0.3)' }
+                  : {}),
               }}
             >
-              <span style={{ color: isMyTurn && handTileIdsInZones.size === 0 ? 'white' : 'rgba(0,0,0,0.2)', fontSize: '1.6rem', lineHeight: 1, fontWeight: 300 }}>
-                {roomState?.deckCount === 0 ? '⏭' : '+'}
-              </span>
-              <span style={{ color: isMyTurn && handTileIdsInZones.size === 0 ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.2)', fontSize: '0.7rem', fontFamily: 'Russo One' }}>
+              {roomState?.deckCount === 0 ? (
+                <svg className="rack-btn-icon" viewBox="0 0 24 24" fill="none" stroke={isMyTurn && handTileIdsInZones.size === 0 ? 'url(#icon-grad-red)' : 'rgba(255,255,255,0.2)'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="13 17 18 12 13 7" />
+                  <polyline points="6 17 11 12 6 7" />
+                </svg>
+              ) : (
+                <svg className="rack-btn-icon" viewBox="0 0 24 24" fill="none" stroke={isMyTurn && handTileIdsInZones.size === 0 ? 'url(#icon-grad-blue)' : 'rgba(255,255,255,0.2)'} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="2" width="20" height="20" rx="4" />
+                  <line x1="12" y1="7" x2="12" y2="17" />
+                  <line x1="7" y1="12" x2="17" y2="12" />
+                </svg>
+              )}
+              <span className="font-heading" style={{ color: isMyTurn && handTileIdsInZones.size === 0 ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.15)', fontSize: '0.65rem' }}>
                 {roomState?.deckCount ?? 0}
               </span>
-            </button>
-            <button
-              onClick={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect()
-                const relY = e.clientY - rect.top
-                const half = rect.height / 2
-                if (relY < half) {
-                  handleEndTurn(false)
-                } else {
-                  handleUndo()
-                }
-              }}
-              title="Arriba: finalizar jugada · Abajo: deshacer última ficha"
-              style={{
-                width: 54, borderRadius: 14, border: 'none', cursor: 'pointer',
-                display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden',
-                transition: 'all 0.15s'
-              }}
-            >
-              <div style={{
-                flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                gap: 1, padding: '4px 0',
-                background: canFinalizeTurn
-                  ? 'linear-gradient(to bottom, #22A34A 0%, #168030 50%, #0A6010 100%)'
-                  : 'rgba(0,0,0,0.25)',
-                outline: canFinalizeTurn ? '2px solid rgba(74,222,128,0.4)' : '2px solid rgba(0,0,0,0.1)',
-                boxShadow: canFinalizeTurn ? '0 4px 10px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2)' : 'none',
-                borderBottom: '1px solid rgba(0,0,0,0.2)',
-                cursor: canFinalizeTurn ? 'pointer' : 'not-allowed',
-              }}>
-                <span style={{ color: canFinalizeTurn ? 'white' : 'rgba(0,0,0,0.2)', fontSize: '1.4rem', lineHeight: 1, fontWeight: 700 }}>✓</span>
-                <span style={{ color: canFinalizeTurn ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.2)', fontSize: '0.6rem', fontFamily: 'Russo One' }}>
-                  {hasChanges ? 'Terminar' : 'Listo'}
-                </span>
-              </div>
-              <div style={{
-                flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                gap: 1, padding: '4px 0',
-                background: isMyTurn && zones.length > 0
-                  ? 'linear-gradient(to bottom, #D4956A 0%, #B07040 50%, #8B5520 100%)'
-                  : 'rgba(0,0,0,0.25)',
-                outline: isMyTurn && zones.length > 0 ? '2px solid rgba(255,255,255,0.15)' : '2px solid rgba(0,0,0,0.1)',
-                boxShadow: isMyTurn && zones.length > 0 ? '0 4px 10px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2)' : 'none',
-                cursor: isMyTurn && zones.length > 0 ? 'pointer' : 'not-allowed',
-              }}>
-                <span style={{ color: isMyTurn && zones.length > 0 ? 'white' : 'rgba(0,0,0,0.2)', fontSize: '1.2rem', lineHeight: 1, fontWeight: 700 }}>↩</span>
-                <span style={{ color: isMyTurn && zones.length > 0 ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.2)', fontSize: '0.55rem', fontFamily: 'Russo One' }}>
-                  Deshacer
-                </span>
-              </div>
-            </button>
+            </motion.button>
+            <div className="flex flex-col gap-1" style={{ width: 56 }}>
+              <motion.button
+                onClick={canFinalizeTurn ? () => handleEndTurn(false) : undefined}
+                whileHover={canFinalizeTurn ? HOVER : {}}
+                whileTap={canFinalizeTurn ? TAP : {}}
+                title="Finalizar jugada"
+                className={`rack-btn flex-1 flex items-center justify-center ${canFinalizeTurn ? 'rack-btn-active' : ''}`}
+                style={{
+                  ...(canFinalizeTurn ? {} : { background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.04)' }),
+                }}
+              >
+                <svg className="rack-btn-icon" viewBox="0 0 24 24" fill="none" stroke={canFinalizeTurn ? 'url(#icon-grad-green)' : 'rgba(255,255,255,0.2)'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <polyline points="8,12 11,15 16,9" />
+                </svg>
+              </motion.button>
+              <motion.button
+                onClick={isMyTurn && zones.length > 0 ? handleUndo : undefined}
+                whileHover={isMyTurn && zones.length > 0 ? HOVER : {}}
+                whileTap={isMyTurn && zones.length > 0 ? TAP : {}}
+                title="Deshacer última ficha"
+                className={`rack-btn flex-1 flex items-center justify-center ${isMyTurn && zones.length > 0 ? 'rack-btn-undo' : ''}`}
+                style={{
+                  ...(isMyTurn && zones.length > 0 ? {} : { background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.04)' }),
+                }}
+              >
+                <svg className="rack-btn-icon" viewBox="0 0 24 24" fill="none" stroke={isMyTurn && zones.length > 0 ? 'url(#icon-grad-amber)' : 'rgba(255,255,255,0.2)'} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 7 3 13 9 13" />
+                  <path d="M21 17a9 9 0 0 0-15-6.72L3 13" />
+                </svg>
+              </motion.button>
+            </div>
           </div>
         </div>
       </div>

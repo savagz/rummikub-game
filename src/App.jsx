@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import socket from './socket.js'
 import HomeScreen from './components/HomeScreen.jsx'
 import LobbyScreen from './components/LobbyScreen.jsx'
 import GameScreen from './components/GameScreen.jsx'
 import EndScreen from './components/EndScreen.jsx'
+import { screenTransition } from './motion.js'
 
 export default function App() {
   const [screen, setScreen] = useState('home')
@@ -56,51 +58,61 @@ export default function App() {
     setScreen('home')
   }
 
-  if (screen === 'home') {
-    return (
-      <HomeScreen
-        onCreateRoom={handleCreateRoom}
-        onJoinRoom={handleJoinRoom}
-        error={error}
-        clearError={() => setError(null)}
-      />
-    )
+  function renderScreen() {
+    if (screen === 'home') {
+      return (
+        <HomeScreen
+          onCreateRoom={handleCreateRoom}
+          onJoinRoom={handleJoinRoom}
+          error={error}
+          clearError={() => setError(null)}
+        />
+      )
+    }
+
+    if (screen === 'lobby') {
+      return (
+        <LobbyScreen
+          roomState={roomState}
+          playerInfo={playerInfo}
+          socketId={socket.id}
+          onLeave={handleLeaveRoom}
+          error={error}
+          clearError={() => setError(null)}
+        />
+      )
+    }
+
+    if (screen === 'game') {
+      return (
+        <GameScreen
+          roomState={roomState}
+          socketId={socket.id}
+          error={error}
+          clearError={() => setError(null)}
+        />
+      )
+    }
+
+    if (screen === 'end') {
+      return (
+        <EndScreen
+          roomState={roomState}
+          socketId={socket.id}
+          onPlayAgain={() => socket.emit('play-again')}
+          onLeave={handleLeaveRoom}
+        />
+      )
+    }
+
+    return null
   }
 
-  if (screen === 'lobby') {
-    return (
-      <LobbyScreen
-        roomState={roomState}
-        playerInfo={playerInfo}
-        socketId={socket.id}
-        onLeave={handleLeaveRoom}
-        error={error}
-        clearError={() => setError(null)}
-      />
-    )
-  }
-
-  if (screen === 'game') {
-    return (
-      <GameScreen
-        roomState={roomState}
-        socketId={socket.id}
-        error={error}
-        clearError={() => setError(null)}
-      />
-    )
-  }
-
-  if (screen === 'end') {
-    return (
-      <EndScreen
-        roomState={roomState}
-        socketId={socket.id}
-        onPlayAgain={() => socket.emit('play-again')}
-        onLeave={handleLeaveRoom}
-      />
-    )
-  }
-
-  return null
+  return (
+    <AnimatePresence mode="wait">
+      <motion.div key={screen} variants={screenTransition} initial="initial" animate="animate" exit="exit">
+        {renderScreen()}
+      </motion.div>
+    </AnimatePresence>
+  )
 }
