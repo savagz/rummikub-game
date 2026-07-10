@@ -52,6 +52,7 @@ export default function HomeScreen({ onCreateRoom, onJoinRoom, error, clearError
         <motion.div variants={fadeSlideUp} className="text-center mb-8">
           <h1 className="font-heading text-5xl text-neon text-purple-300 mb-1">RUMMIKUB</h1>
           <p className="text-slate-400 text-sm tracking-widest">MULTIJUGADOR</p>
+          <p className="text-slate-600 text-xs mt-1">v2.1.0</p>
         </motion.div>
 
         <motion.div variants={fadeSlideUp} layout className="glass-panel p-6 space-y-6">
