@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react'
+import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import socket from '../socket.js'
 import { isValidMeld, calculateScore, tryReplaceJoker } from '../game/rummikubEngine.js'
@@ -17,6 +18,20 @@ const TEXT_COLOR = { red: '#B91C1C', amber: '#B45309', green: '#166534' }
 
 let _zoneId = 0
 function nextZoneId() { return `z-${++_zoneId}` }
+
+function sameDraft(a, b) {
+  if (a === b) return true
+  if (!a || !b) return false
+  if (a.playerId !== b.playerId) return false
+  if (a.affectedMeldIndices?.length !== b.affectedMeldIndices?.length) return false
+  if (a.affectedMeldIndices?.some((v, i) => v !== b.affectedMeldIndices[i])) return false
+  if (a.zones?.length !== b.zones?.length) return false
+  return a.zones.every((za, i) => {
+    const zb = b.zones[i]
+    if (!zb || za.id !== zb.id || za.tiles.length !== zb.tiles.length) return false
+    return za.tiles.every((t, j) => t.id === zb.tiles[j]?.id)
+  })
+}
 
 function useSounds() {
   const ctxRef = useRef(null)
@@ -79,7 +94,7 @@ function CircularTimer({ left, total }) {
   )
 }
 
-function PlayerAvatar({ player, isCurrent, isMe, left, total }) {
+const PlayerAvatar = memo(function PlayerAvatar({ player, isCurrent, isMe, left, total }) {
   const urgent = left <= 10
   return (
     <div className="flex flex-col items-center" style={{ minWidth: 100 }}>
@@ -124,18 +139,18 @@ function PlayerAvatar({ player, isCurrent, isMe, left, total }) {
       </div>
     </div>
   )
-}
+})
 
-function CreamTile({ tile, className = '', style = {}, ...rest }) {
+const CreamTile = memo(function CreamTile({ tile, className = '', style = {}, ...rest }) {
   const colorCls = tile.isJoker ? 'ctile-joker' : `ctile-${tile.color}`
   return (
     <div className={`ctile ${colorCls} ${className}`} style={style} {...rest}>
       {tile.isJoker ? '★' : tile.number}
     </div>
   )
-}
+})
 
-function BoardMeld({ meld, originalIdx, isDropTarget, canInteract, draggingTileId, onTileDragStart, onMeldDragStart, onMeldDragEnd, onDrop, onDragOverMeld }) {
+const BoardMeld = memo(function BoardMeld({ meld, originalIdx, isDropTarget, canInteract, draggingTileId, onTileDragStart, onMeldDragStart, onMeldDragEnd, onDrop, onDragOverMeld, onTileTouchStart, onMeldTouchStart }) {
   return (
     <motion.div
       layout
@@ -151,10 +166,14 @@ function BoardMeld({ meld, originalIdx, isDropTarget, canInteract, draggingTileI
           ${canInteract ? 'cursor-pointer' : ''}
           `}
         draggable={canInteract}
+        data-drop-type="meld"
+        data-meld-idx={originalIdx}
         onDragStart={canInteract ? (e) => onMeldDragStart(e, originalIdx) : undefined}
         onDragEnd={canInteract ? onMeldDragEnd : undefined}
         onDragOver={canInteract ? (e) => { e.preventDefault(); e.stopPropagation(); onDragOverMeld && onDragOverMeld(e, originalIdx) } : undefined}
         onDrop={canInteract ? (e) => onDrop(e, originalIdx) : undefined}
+        onTouchStart={canInteract ? (e) => onMeldTouchStart(e, originalIdx) : undefined}
+        style={{ touchAction: canInteract ? 'none' : 'auto' }}
         title={canInteract ? 'Arrastra fichas de tu mano para añadir, o arrastra una ficha para tomar' : undefined}
       >
         {meld.map((tile, tileIdx) => (
@@ -165,9 +184,11 @@ function BoardMeld({ meld, originalIdx, isDropTarget, canInteract, draggingTileI
             draggable={canInteract}
             onDragStart={canInteract ? (e) => { e.stopPropagation(); onTileDragStart(e, originalIdx, tile, tileIdx) } : undefined}
             onDragEnd={canInteract ? onMeldDragEnd : undefined}
+            onTouchStart={canInteract ? (e) => { e.stopPropagation(); onTileTouchStart(e, originalIdx, tile) } : undefined}
             style={{
               pointerEvents: canInteract ? 'auto' : 'none',
               cursor: canInteract ? 'grab' : 'default',
+              touchAction: canInteract ? 'none' : 'auto',
             }}
           />
         ))}
@@ -175,9 +196,9 @@ function BoardMeld({ meld, originalIdx, isDropTarget, canInteract, draggingTileI
 
     </motion.div>
   )
-}
+})
 
-function Zone({ zone, canInteract, isDropTarget, dragTileId, onZoneDrop, onTileDragStart, onTileDragEnd, onDoubleClickTile, fromBoard }) {
+const Zone = memo(function Zone({ zone, canInteract, isDropTarget, dragTileId, onZoneDrop, onTileDragStart, onTileDragEnd, onDoubleClickTile, fromBoard, onTileTouchStart }) {
   const valid = zone.tiles.length >= 3 && isValidMeld(zone.tiles)
 
   return (
@@ -192,6 +213,9 @@ function Zone({ zone, canInteract, isDropTarget, dragTileId, onZoneDrop, onTileD
       <div
         className={`flex gap-1 p-2 rounded-xl border-2 transition-all duration-150
           ${isDropTarget ? 'meld-drop-active' : valid ? 'border-green-500/60 bg-green-900/20' : 'border-red-500/40 bg-red-900/10'}`}
+        data-drop-type="zone"
+        data-zone-id={zone.id}
+        data-insert-at={zone.tiles.length}
         onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
         onDrop={(e) => onZoneDrop(e, zone.id, zone.tiles.length)}
       >
@@ -201,13 +225,18 @@ function Zone({ zone, canInteract, isDropTarget, dragTileId, onZoneDrop, onTileD
             tile={tile}
             className={`board-ctile ${dragTileId === tile.id ? 'opacity-30' : ''}`}
             draggable={canInteract}
+            data-drop-type="zone"
+            data-zone-id={zone.id}
+            data-insert-at={idx}
             onDragStart={canInteract ? (e) => onTileDragStart(e, zone.id, tile, idx) : undefined}
             onDragEnd={canInteract ? onTileDragEnd : undefined}
             onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
             onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onZoneDrop(e, zone.id, idx) }}
+            onTouchStart={canInteract ? (e) => { e.stopPropagation(); onTileTouchStart(e, zone.id, tile) } : undefined}
             onDoubleClick={() => canInteract && onDoubleClickTile(zone.id, tile.id)}
             style={{
               cursor: canInteract ? 'grab' : 'default',
+              touchAction: canInteract ? 'none' : 'auto',
               ...(fromBoard.has(tile.id) ? { outline: '2px solid rgba(59,130,246,0.6)', outlineOffset: 1 } : {}),
             }}
             title={fromBoard.has(tile.id) ? 'Ficha del tablero' : 'Doble clic para devolver a mano'}
@@ -216,7 +245,7 @@ function Zone({ zone, canInteract, isDropTarget, dragTileId, onZoneDrop, onTileD
       </div>
     </motion.div>
   )
-}
+})
 
 export default function GameScreen({ roomState, socketId, error, clearError }) {
   const sound = useSounds()
@@ -230,6 +259,7 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
   const [drawnTileId, setDrawnTileId] = useState(null)
   const [opponentDraft, setOpponentDraft] = useState(null)
   const [turnFlash, setTurnFlash] = useState(false)
+  const [touchPreviewPos, setTouchPreviewPos] = useState(null)
 
   const autoDrawnRef = useRef(false)
   const pendingDrawRef = useRef(false)
@@ -239,6 +269,12 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
   const dragMeldIdx = useRef(null)
   const dragZoneIdRef = useRef(null)
   const handleEndTurnRef = useRef()
+  const touchDragRef = useRef(null)
+  const touchStartPosRef = useRef({ x: 0, y: 0 })
+  const touchActiveRef = useRef(false)
+  const liveRef = useRef({})
+  const pendingTouchPosRef = useRef(null)
+  const touchRafIdRef = useRef(null)
 
   const me = roomState?.players?.find(p => p.id === socketId)
   const isMyTurn = roomState?.currentPlayerId === socketId
@@ -276,11 +312,13 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
     [affectedMeldIndices, board, zoneTileIds]
   )
 
-  const canFinalizeTurn = hasChanges &&
+  const canFinalizeTurn = useMemo(() => hasChanges &&
     zones.every(z => z.tiles.length >= 3 && isValidMeld(z.tiles)) &&
     (affectedMeldIndices.length > 0 ? allAffectedTilesInZones : boardTileIdsInZones.size === 0) &&
     (affectedMeldIndices.length === 0 || handTileIdsInZones.size > 0) &&
-    meetsInitialMeld
+    meetsInitialMeld,
+    [hasChanges, zones, affectedMeldIndices, allAffectedTilesInZones, boardTileIdsInZones, handTileIdsInZones, meetsInitialMeld]
+  )
 
   const opponentAffectedSet = useMemo(
     () => new Set(opponentDraft?.affectedMeldIndices ?? []),
@@ -288,7 +326,9 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
   )
 
   const visibleBoard = useMemo(
-    () => board.map((meld, i) => ({ meld, i })).filter(({ i }) => !affectedMeldIndices.includes(i) && !opponentAffectedSet.has(i)),
+    () => board
+      .map((meld, i) => ({ meld, i, key: meld.map(t => t.id).join('_') }))
+      .filter(({ i }) => !affectedMeldIndices.includes(i) && !opponentAffectedSet.has(i)),
     [board, affectedMeldIndices, opponentAffectedSet]
   )
 
@@ -383,7 +423,7 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
   useEffect(() => {
     const handler = (draft) => {
       if (draft.playerId !== socketId) {
-        setOpponentDraft(draft)
+        setOpponentDraft(prev => sameDraft(prev, draft) ? prev : draft)
       }
     }
     socket.on('draft-updated', handler)
@@ -518,9 +558,7 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
   }
 
   function affectMeld(meldIdx) {
-    if (!affectedMeldIndices.includes(meldIdx)) {
-      setAffectedMeldIndices(prev => [...prev, meldIdx])
-    }
+    setAffectedMeldIndices(prev => prev.includes(meldIdx) ? prev : [...prev, meldIdx])
   }
 
   function handleRackTileDropOnBoard(tileId, targetZoneId, insertAt) {
@@ -652,11 +690,11 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
     }
   }
 
-  function handleDoubleClickZoneTile(zoneId, tileId) {
+  const handleDoubleClickZoneTile = useCallback((zoneId, tileId) => {
     if (!handMap.has(tileId)) return
     removeTileFromZone(zoneId, tileId)
     sound('place')
-  }
+  }, [handMap, sound])
 
   function handleUndo() {
     if (!isMyTurn || zones.length === 0) return
@@ -771,39 +809,70 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
     e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'rack', tileId: tile.id }))
   }
 
-  function onBoardTileDragStart(e, meldIdx, tile) {
+  const onBoardTileDragStart = useCallback((e, meldIdx, tile) => {
     if (!canInteractWithBoard) { e.preventDefault(); return }
     dragFrom.current = 'boardTile'
     dragMeldIdx.current = meldIdx
     setDragTileId(tile.id)
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'boardTile', meldIdx, tileId: tile.id }))
-  }
+  }, [canInteractWithBoard])
 
-  function onBoardMeldDragStart(e, meldIdx) {
+  const onBoardMeldDragStart = useCallback((e, meldIdx) => {
     if (!canInteractWithBoard) { e.preventDefault(); return }
     dragFrom.current = 'boardMeld'
     dragMeldIdx.current = meldIdx
     setDragTileId(null)
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'boardMeld', meldIdx }))
-  }
+  }, [canInteractWithBoard])
 
-  function onZoneTileDragStart(e, zoneId, tile) {
+  const onZoneTileDragStart = useCallback((e, zoneId, tile) => {
     dragFrom.current = 'zoneTile'
     dragZoneIdRef.current = zoneId
     setDragTileId(tile.id)
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'zoneTile', zoneId, tileId: tile.id }))
-  }
+  }, [])
 
-  function onDragEnd() {
+  const onDragEnd = useCallback(() => {
     setDragTileId(null)
     setDropTarget(null)
     dragFrom.current = null
     dragMeldIdx.current = null
     dragZoneIdRef.current = null
+  }, [])
+
+  function handleTouchStart(data, tile, touch) {
+    touchDragRef.current = { data, tile }
+    touchStartPosRef.current = { x: touch.clientX, y: touch.clientY }
+    touchActiveRef.current = false
+    setDragTileId(tile?.id ?? null)
   }
+
+  function onRackTouchStart(e, tile) {
+    const t = e.touches[0]
+    if (!t) return
+    handleTouchStart({ type: 'rack', tileId: tile.id }, tile, t)
+  }
+
+  const onBoardTileTouchStart = useCallback((e, meldIdx, tile) => {
+    const t = e.touches[0]
+    if (!t) return
+    handleTouchStart({ type: 'boardTile', meldIdx, tileId: tile.id }, tile, t)
+  }, [])
+
+  const onBoardMeldTouchStart = useCallback((e, meldIdx) => {
+    const t = e.touches[0]
+    if (!t) return
+    handleTouchStart({ type: 'boardMeld', meldIdx }, null, t)
+  }, [])
+
+  const onZoneTileTouchStart = useCallback((e, zoneId, tile) => {
+    const t = e.touches[0]
+    if (!t) return
+    handleTouchStart({ type: 'zoneTile', zoneId, tileId: tile.id }, tile, t)
+  }, [])
 
   function parseDragData(e) {
     try {
@@ -817,11 +886,8 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
     }
   }
 
-  function onBoardDrop(e) {
-    e.preventDefault()
-    if (!isMyTurn) return
-    const data = parseDragData(e)
-    if (!data) return
+  function applyBoardDrop(data) {
+    if (!isMyTurn || !data) return
 
     if (data.type === 'rack') {
       handleRackTileDropOnBoard(data.tileId, null, undefined)
@@ -844,11 +910,13 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
     setDragTileId(null)
   }
 
-  function onZoneDrop(e, zoneId, insertAt) {
-    e.preventDefault(); e.stopPropagation()
-    if (!isMyTurn) return
-    const data = parseDragData(e)
-    if (!data) return
+  function onBoardDrop(e) {
+    e.preventDefault()
+    applyBoardDrop(parseDragData(e))
+  }
+
+  function applyZoneDrop(data, zoneId, insertAt) {
+    if (!isMyTurn || !data) return
 
     if (data.type === 'rack') {
       handleRackTileDropOnBoard(data.tileId, zoneId, insertAt)
@@ -868,11 +936,13 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
     setDragTileId(null)
   }
 
-  function onMeldDrop(e, meldIdx) {
+  const onZoneDrop = useCallback((e, zoneId, insertAt) => {
     e.preventDefault(); e.stopPropagation()
-    if (!isMyTurn) return
-    const data = parseDragData(e)
-    if (!data) return
+    liveRef.current.applyZoneDrop(parseDragData(e), zoneId, insertAt)
+  }, [])
+
+  function applyMeldDrop(data, meldIdx) {
+    if (!isMyTurn || !data) return
 
     if (data.type === 'rack') {
       handleBoardMeldDropOnMeld(data.tileId, meldIdx)
@@ -886,11 +956,20 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
     setDragTileId(null)
   }
 
-  function onRackDrop(e) {
-    e.preventDefault()
-    if (!isMyTurn) return
-    const data = parseDragData(e)
-    if (!data) return
+  const onMeldDrop = useCallback((e, meldIdx) => {
+    e.preventDefault(); e.stopPropagation()
+    liveRef.current.applyMeldDrop(parseDragData(e), meldIdx)
+  }, [])
+
+  const handleMeldDragOver = useCallback((e, meldIdx) => {
+    setDropTarget(prev => {
+      const next = `meld-${meldIdx}`
+      return prev === next ? prev : next
+    })
+  }, [])
+
+  function applyRackDrop(data) {
+    if (!isMyTurn || !data) return
 
     if (data.type === 'zoneTile') {
       const tile = zones.find(z => z.id === data.zoneId)?.tiles.find(t => t.id === data.tileId)
@@ -903,6 +982,98 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
     setDropTarget(null)
     setDragTileId(null)
   }
+
+  function onRackDrop(e) {
+    e.preventDefault()
+    applyRackDrop(parseDragData(e))
+  }
+
+  liveRef.current = { applyBoardDrop, applyZoneDrop, applyMeldDrop, applyRackDrop, onDragEnd }
+
+  useEffect(() => {
+    function resolveDropElement(x, y) {
+      const el = document.elementFromPoint(x, y)
+      return el?.closest('[data-drop-type]') ?? null
+    }
+
+    function setDropTargetIfChanged(next) {
+      setDropTarget(prev => prev === next ? prev : next)
+    }
+
+    function flushTouchPreview() {
+      touchRafIdRef.current = null
+      if (pendingTouchPosRef.current) {
+        setTouchPreviewPos(pendingTouchPosRef.current)
+      }
+    }
+
+    function onTouchMove(e) {
+      if (!touchDragRef.current) return
+      const t = e.touches[0]
+      if (!t) return
+      const dx = t.clientX - touchStartPosRef.current.x
+      const dy = t.clientY - touchStartPosRef.current.y
+      if (!touchActiveRef.current) {
+        if (Math.hypot(dx, dy) < 8) return
+        touchActiveRef.current = true
+      }
+      e.preventDefault()
+      pendingTouchPosRef.current = { x: t.clientX, y: t.clientY }
+      if (touchRafIdRef.current === null) {
+        touchRafIdRef.current = requestAnimationFrame(flushTouchPreview)
+      }
+
+      const target = resolveDropElement(t.clientX, t.clientY)
+      if (!target) { setDropTargetIfChanged(null); return }
+      const type = target.dataset.dropType
+      if (type === 'board') setDropTargetIfChanged('board')
+      else if (type === 'meld') setDropTargetIfChanged(`meld-${target.dataset.meldIdx}`)
+      else if (type === 'zone') setDropTargetIfChanged(`zone-${target.dataset.zoneId}`)
+      else if (type === 'rack') setDropTargetIfChanged('rack')
+    }
+
+    function onTouchEnd(e) {
+      if (!touchDragRef.current) return
+      const { data } = touchDragRef.current
+      const wasActive = touchActiveRef.current
+      const t = e.changedTouches[0]
+      const live = liveRef.current
+
+      if (wasActive && t) {
+        const target = resolveDropElement(t.clientX, t.clientY)
+        if (target) {
+          const type = target.dataset.dropType
+          if (type === 'board') live.applyBoardDrop(data)
+          else if (type === 'meld') live.applyMeldDrop(data, Number(target.dataset.meldIdx))
+          else if (type === 'zone') live.applyZoneDrop(data, target.dataset.zoneId, Number(target.dataset.insertAt))
+          else if (type === 'rack') live.applyRackDrop(data)
+        }
+      }
+
+      touchDragRef.current = null
+      touchActiveRef.current = false
+      if (touchRafIdRef.current !== null) {
+        cancelAnimationFrame(touchRafIdRef.current)
+        touchRafIdRef.current = null
+      }
+      pendingTouchPosRef.current = null
+      setTouchPreviewPos(null)
+      live.onDragEnd()
+    }
+
+    document.addEventListener('touchmove', onTouchMove, { passive: false })
+    document.addEventListener('touchend', onTouchEnd)
+    document.addEventListener('touchcancel', onTouchEnd)
+    return () => {
+      document.removeEventListener('touchmove', onTouchMove)
+      document.removeEventListener('touchend', onTouchEnd)
+      document.removeEventListener('touchcancel', onTouchEnd)
+      if (touchRafIdRef.current !== null) {
+        cancelAnimationFrame(touchRafIdRef.current)
+        touchRafIdRef.current = null
+      }
+    }
+  }, [])
 
   const diffLabel = { easy: 'Fácil', medium: 'Medio', hard: 'Difícil' }[roomState?.difficulty] ?? ''
   const midpoint = Math.ceil(displayHand.length / 2)
@@ -1009,6 +1180,7 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
       <div
         className="board-area"
         style={{ flex: 1, overflow: 'auto', position: 'relative', padding: 16 }}
+        data-drop-type="board"
         onDragOver={(e) => { e.preventDefault(); if (dropTarget !== 'board') setDropTarget('board') }}
         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDropTarget(null) }}
         onDrop={onBoardDrop}
@@ -1049,9 +1221,9 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
 
           <motion.div layout className="flex flex-wrap gap-3">
             <AnimatePresence>
-              {visibleBoard.map(({ meld, i }) => (
+              {visibleBoard.map(({ meld, i, key }) => (
                 <BoardMeld
-                  key={i}
+                  key={key}
                   meld={meld}
                   originalIdx={i}
                   isDropTarget={dropTarget === `meld-${i}`}
@@ -1061,7 +1233,9 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
                   onMeldDragStart={onBoardMeldDragStart}
                   onMeldDragEnd={onDragEnd}
                   onDrop={onMeldDrop}
-                  onDragOverMeld={() => setDropTarget(`meld-${i}`)}
+                  onDragOverMeld={handleMeldDragOver}
+                  onTileTouchStart={onBoardTileTouchStart}
+                  onMeldTouchStart={onBoardMeldTouchStart}
                 />
               ))}
             </AnimatePresence>
@@ -1082,6 +1256,7 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
                   onTileDragEnd={onDragEnd}
                    onDoubleClickTile={handleDoubleClickZoneTile}
                   fromBoard={allZoneBoardTileIds}
+                  onTileTouchStart={onZoneTileTouchStart}
                 />
               ))}
             </AnimatePresence>
@@ -1117,6 +1292,7 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
             <div
               className={`flex items-center justify-center min-h-16 mt-3 p-4 rounded-2xl border-2 border-dashed transition-all duration-150
                 ${dropTarget === 'board' ? 'staging-drop-active' : 'border-white/15 bg-white/3'}`}
+              data-drop-type="board"
               onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); if (dropTarget !== 'board') setDropTarget('board') }}
               onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onBoardDrop(e) }}
             >
@@ -1147,6 +1323,7 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
       <div
         className={`rack-tray ${dropTarget === 'rack' ? 'rack-drop-active' : ''}`}
         style={{ flexShrink: 0, padding: '10px 12px 12px' }}
+        data-drop-type="rack"
         onDragOver={(e) => { if (dragFrom.current === 'zoneTile') { e.preventDefault(); setDropTarget('rack') } }}
         onDragLeave={() => setDropTarget(null)}
         onDrop={onRackDrop}
@@ -1200,6 +1377,7 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
                       draggable={isMyTurn && !inPlay}
                       onDragStart={(e) => onRackDragStart(e, tile)}
                       onDragEnd={onDragEnd}
+                      onTouchStart={isMyTurn && !inPlay ? (e) => onRackTouchStart(e, tile) : undefined}
                       className={`ctile rack-ctile
                         ${inPlay ? 'rack-ctile-staged' : ''}
                         ${!isMyTurn || inPlay ? 'rack-ctile-disabled' : ''}
@@ -1207,7 +1385,7 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
                         ${tile.isJoker ? 'ctile-joker' : ''}
                         ${isDrawn && !inPlay ? 'rack-ctile-drawn' : ''}
                       `}
-                      style={{ color: inPlay ? 'transparent' : nc }}
+                      style={{ color: inPlay ? 'transparent' : nc, touchAction: isMyTurn && !inPlay ? 'none' : 'auto' }}
                       title={tile.isJoker ? 'Comodín' : `${tile.number} ${tile.color}`}
                     >
                       {inPlay ? '' : tile.isJoker ? '★' : tile.number}
@@ -1289,6 +1467,24 @@ export default function GameScreen({ roomState, socketId, error, clearError }) {
           </div>
         </div>
       </div>
+
+      {touchPreviewPos && touchDragRef.current?.tile && createPortal(
+        <div
+          style={{
+            position: 'fixed',
+            left: touchPreviewPos.x,
+            top: touchPreviewPos.y - 60,
+            transform: 'translate(-50%, -50%) scale(1.15)',
+            pointerEvents: 'none',
+            zIndex: 9999,
+            opacity: 0.92,
+            filter: 'drop-shadow(0 6px 14px rgba(0,0,0,0.5))',
+          }}
+        >
+          <CreamTile tile={touchDragRef.current.tile} className="board-ctile" />
+        </div>,
+        document.body
+      )}
     </div>
   )
 }
